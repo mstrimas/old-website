@@ -1,0 +1,287 @@
+---
+layout: post
+title: "Tidy spatial data in R: using dplyr, tidyr, and ggplot2 with sf"
+published: true
+excerpt: >
+  The new R package sf, which replaces sp for handling spatial objects, is 
+  designed to play nicely with the Tidyverse. In this post I show how sf 
+  objects are stored as data frames and how this allows them to work with with 
+  ggplot2, dplyr, and tidyr.
+category: r
+tags: r spatial gis
+editor_options: 
+  chunk_output_type: console
+---
+
+Traditionally the package `sp` has been the standard for storing spatial data in R. This package (along with others such as `raster`) help make R a powerful GIS. However, `sp`'s days may be numbered. I've recently been playing around with the new [R package `sf`](https://github.com/edzer/sfr) which is meant to supersede `sp`. This package provides native support for [Simple Features](https://en.wikipedia.org/wiki/Simple_Features) in R, can perform topological operations by interfacing with [GEOS](https://trac.osgeo.org/geos), and can read and write to a wide variety of spatial file formats courtesy of [GDAL](http://www.gdal.org/).
+
+Thus far I've been really impressed with the functionality provided by `sf`; it appears to do everything `sp`, `rgdal`, and `rgeos` did, but in a more modern and intuitive fashion. However, perhaps my favourite thing about `sf` is that the authors have clearly been informed by the design principles of Hadley Wickham's [Tidyverse](http://tidyverse.org/). In particular, I've noticed the following features:
+
+- Spatial objects are stored as data frames, with the feature geometries stored in list-columns
+- All functions begin with `st_` for easy RStudio tab completion, and `snake_case` is used throughout the package
+- Functions are pipe-friendly
+- `dplyr` and `tidyr` verbs have been defined for the `sf` objects
+- `ggplot2` will soon be able to plot `sf` objects directly
+
+These features make `sf` fit into modern data analysis pipelines much better than `sp`. For example, it always frustrated me that I couldn't use `dplyr` verbs like `mutate()` or `select()` with `sp`, and that I always had to convert `sp` objects to data frames before using `ggplot2`. I don't think the existing package vignettes sufficiently highlight the Tidy-ness of `sf`, so I've put together this post to cover some of the features I've discovered in my initial explorations of the package. Much of this material is touched on in the discussion in [this issue](https://github.com/edzer/sfr/issues/42) on the GitHub repository for the package.
+
+## Required packages
+
+Obviously, we'll need to load `sf` and the `tidyverse`. Note that I'm using the most up-to-date versions of all packages and, in some cases (e.g. `ggplot2`), I'm using development versions from GitHub.
+
+```{r packages, echo = -1}
+set.seed(1)
+library(sf)
+library(tidyverse)
+library(viridis)
+library(rvest)
+```
+
+## Simple Features as data frames
+
+[Simple Features](https://en.wikipedia.org/wiki/Simple_Features) is an open source standard for the representation of real-world objects (i.e. features) in the computer. The [first vignette](https://edzer.github.io/sfr/articles/sf1.html) for the `sf` package describes in detail the different types of features that can be represented (e.g. `POINT`, `LINESTRING`, `POLYGON`, etc.) and how to work with them using the functions in `sf`. What I want to focus on here is that `sf` uses the familiar data frame to store features, rather than the more opaque S4 objects used by `sp`. Most of this material is taken almost directly from the [first vignette](https://edzer.github.io/sfr/articles/sf1.html), so if you've worked through that, you can skip ahead to the next section. 
+
+In this package, sets of features are stored as data frames with the additional class `sf`. Each row consists of a feature and each column an attribute. The difference compared to a normal data frame is that there is an additional list-column of class `sfc` storing the feature geometries. Each element of the `sfc` column is a object of class `sfg`, the geometry of a single feature.
+
+Let's start by loading some sample data from the package. This is a shapefile of counties in North Carolina. I'll also convert this to an `sp` object for comparison.
+
+```{r nc}
+nc <- st_read(system.file("shape/nc.shp", package="sf"), quiet = TRUE)
+# limit to first 2 counties
+nc <- nc[1:2,]
+# convert to SpatialPolygonsDataFrame
+nc_sp <- as(nc, "Spatial")
+```
+
+The resulting `sf` object is essentially just a `data.frame` with an extra column for the spatial information.
+
+```{r nc-sf}
+class(nc)
+glimpse(nc)
+# convert to tibble for nicer printing
+as_tibble(nc)
+```
+
+The great thing about this is that everyone knows how to work with data frames in R, so these `sf` objects are easy to inspect and play around with. Furthermore, this keeps the geometry and attribute data together in one place, i.e. they're in the same row of the data frame. Contrast this to `sp`, which stores these data in an S4 object of class `SpatialPolygonsDataFrame`:
+
+```{r nc-sp}
+class(nc_sp)
+str(nc_sp)
+```
+
+Note that the attribute data is stored as a `data.frame` in the `data` slot and the features are stored separately in the `polygons` slot. Delving into this `polygons` object reveals a series of nested lists and S4 objects, which can be confusing to work with directly.
+
+The geometry list-column of an `sf` object is an object of class `sfc` and an additional class corresponding to the geometry type, in this case `sfc_MULTIPOLYGON`. It can be accessed with `st_geometry()`. Additional information about the features, such as the coordinate reference system, is stored as attributes:
+
+```{r sfc}
+(nc_geom <- st_geometry(nc))
+st_geometry(nc) %>% class()
+# attributes
+attributes(nc_geom)
+```
+
+Finally, individual simple features are `sfg` objects with additional classes corresponding to the specific type of feature. Here classes `XY` and `MULTIPOLYGON` specify that this is a 2-dimensional `MULTIPOLYGON` geometry.
+
+```{r sfg}
+nc_geom[[1]] %>% class
+```
+
+Internally, these `sfg` objects are vectors for points, matrices for `LINESTRING` objects, and lists for anything else. Further details are available in the package vignette.
+
+## Tidyverse support
+
+The main takeaway from the previous section is **`sf` objects are data frames!** Since data frames are at the core of the Tidyverse is seems reasonable that many of the functions from Tidyverse packages should be applicable to the spatial objects from `sf`. Sure enough the creators of `sf` have provided methods for all the standard `dplyr` and `tidyr` verbs that we know and love. Furthermore, the development version of `ggpplot2` supports plotting of `sf` objects.
+
+## `ggplot`
+
+With `sp`, spatial objects had to be converted to data frames (e.g. with `fortify()`) prior to plotting with `ggplot2`, however, since `sf` objects are already data frames they can be plotted with the help of the new `geom_sf()`.
+
+```{r ggplot, dpi=96, fig.width=700/96, fig.height=300/96}
+nc <- st_read(system.file("shape/nc.shp", package="sf"), quiet = TRUE)
+ggplot(nc) +
+  geom_sf(aes(fill = AREA)) +
+  scale_fill_viridis("Area") +
+  ggtitle("Area of counties in North Carolina") +
+  theme_bw()
+```
+
+In addition, the new `coord_sf()` can be used to plot these features in a different projection, for example an Albers equal area projection.
+
+```{r ggplot-proj, dpi=96, fig.width=700/96, fig.height=300/96}
+ggplot(nc) +
+  geom_sf(aes(fill = AREA)) +
+  scale_fill_viridis("Area") +
+  coord_sf(crs = st_crs(102003)) +
+  ggtitle("Area of counties in North Carolina (Albers)") +
+  theme_bw()
+```
+
+## `dplyr`
+
+`dplyr` is the gold standard for data manipulation and offers a variety of benefits compared to base R functions. It is specifically designed for working with `data.frame`-like objects such as those from the `sf` package. The following verbs operate only on the attribute data and leave the geometries untouched:
+
+- `select()` keeps the specified variables, possibly renaming them
+- `rename()` renames a variable and leaves all others unchanged
+- `filter()` returns the rows that match the given conditions
+- `mutate()` adds new variables based on existing variables
+- `transmute()` creates new variables and drops existing variables
+- `arrange()` sorts by the given variables
+- `slice()` selects rows based on row number
+- `sample_n()` samples n features randomly
+
+The following example demonstrates the use of these verbs:
+
+```{r select}
+nc %>% 
+  # calulate area in km^2
+  mutate(area_km2 = AREA * 10000) %>% 
+  # select desired columns, note geometry column not explicitly selected
+  select(name = NAME, area_km2) %>% 
+  # filter to counties over 1,000 km^2
+  filter(area_km2 > 2000) %>% 
+  # arrange in descending order of area
+  arrange(desc(area_km2)) %>% 
+  # select first three rows
+  slice(1:3)
+```
+
+Note here that the geometry column is retained unmodified, despite not being explicitly `select()`ed. `transmute()` and `rename()` work similarly:
+
+```{r transmute}
+# transmute drops all variables other than the new one
+nc %>% 
+  # calulate area in km^2
+  transmute(area_km2 = AREA * 10000) %>%
+  # rename the geometry column
+  rename(geom = geometry) %>% 
+  names()
+```
+
+We can take a random sample of features from the set using `sample_n()`:
+
+```{r sample}
+nc %>% 
+  select(AREA) %>% 
+  sample_n(4) %>% 
+  as_tibble()
+```
+
+It is also possible to use functions from `sf` that act on the geometry column within a mutate statement. For example, if there wasn't already an area column, one could be created using `st_area()`:
+
+```{r mutate-sf}
+nc %>% 
+  mutate(area_m2 = st_area(geometry)) %>% 
+  select(name = NAME, area_m2, area = AREA) %>% 
+  head() %>% 
+  as_tibble()
+```
+
+### Grouped operations
+
+`dplyr` also allows for group-wise operations on `sf` objects. `group_by()` groups a data frame by variables within the table. Subsequently, `summarise()` is used to perform group-wise summaries of the data. Let's start by adding an arbitrary grouping variable, then calculate areas averaged over this variable.
+
+```{r summarize, dpi=96, fig.width=700/96, fig.height=300/96} 
+# add an arbitrary grouping variable
+nc_groups <- nc %>% 
+  mutate(group = sample(LETTERS[1:3], nrow(.), replace = TRUE))
+# average area by group
+nc_mean_area <- nc_groups %>% 
+  group_by(group) %>% 
+  summarise(area_mean = mean(AREA))
+# plot
+ggplot(nc_mean_area) +
+  geom_sf(aes(fill = area_mean)) +
+  scale_fill_distiller("Area", palette = "Greens") +
+  ggtitle("Mean area by group") +
+  theme_bw()
+```
+
+Notice that in addition to the attribute data being aggregated, the geometries have been aggregated as well. All geometries in each group have been combined together and the boundaries between adjacent geometries dissolved. Internally, the function `st_union()` is used to achieve this.
+
+As with normal data frame, grouped filtering and mutating can be performed on `sf` objects. For example, to calculate the proportional allocation of births between counties within each group, use a grouped `mutate()`:
+
+```{r group-mutate, error=TRUE}
+# grouped mutate: proportional area of county within group
+nc_groups %>% 
+  select(group, AREA) %>% 
+  group_by(group) %>% 
+  ungroup() %>% 
+  mutate(area_prop = sum(AREA)) %>% 
+  as_tibble()
+```
+
+Note that this currently throws an error, but [I've filed an issue](https://github.com/edzer/sfr/issues/42) and the problem has been fixed in the development version of the package.
+
+To only retain countries within groups that have area greater than a given threshold, a grouped `filter()` can be used:
+
+```{r group-filter}
+# grouped filter: only keep counties in groups with area greater than 0.13
+nc_groups %>% 
+  select(group, AREA) %>% 
+  group_by(group) %>% 
+  filter(mean(AREA) > 0.13) %>% 
+  as_tibble()
+```
+
+### Joins
+
+`dplyr` has a series of functions for joining data frames together based on shared columns. These functions have all been implemented in `sf` and are a great way to add additional attribute data from other sources to your spatial data. However, note that it is only possible to join a `sf` object to a plain `data.frame`. In particular, joining two `sf` objects is prohibited.
+
+Let's start by scraping some county-level population data from Wikipedia.
+
+```{r population}
+pop <- "https://en.wikipedia.org/wiki/List_of_counties_in_North_Carolina" %>% 
+  read_html() %>% 
+  html_table(fill = TRUE) %>% 
+  `[[`(2) %>% 
+  select(County, starts_with("Population")) %>% 
+  set_names(c("county", "population")) %>% 
+  mutate(county = gsub(" County", "", county),
+         population = gsub("(^[0-9]*♠)|,", "", population) %>% parse_integer())
+```
+
+Now we'll join this population data to our spatial data and plot it.
+
+```{r joins, dpi=96, fig.width=700/96, fig.height=300/96}
+nc %>% 
+  transmute(county = as.character(NAME)) %>% 
+  inner_join(pop, by = "county") %>%
+  ggplot() +
+    geom_sf(aes(fill = population)) +
+    scale_fill_viridis("Population", labels = scales::comma) +
+    ggtitle("County-level population in North Carolina") +
+    theme_bw()
+```
+
+All the other joining functions (e.g. `left_join()`, `anti_join()`, etc.) work similarly. If the second argument of any of these functions is an `sf` object, and not a normal data frame, an error will be raised. Presumably this is because it's unclear how the two different geometries should be combined, though there does seem to be some [discussion](https://github.com/edzer/sfr/issues/42) about how to implement joins involving two sets of geometries:
+
+```{r join-error, error = TRUE} 
+inner_join(nc, nc, by = "FIPS")
+```
+
+These `dplyr` functions are all for joining based on attribute data. If you're looking to perform a spatial join (e.g. join two `sf` objects based on intersection of geometries) then you should use the function `st_join()`.
+
+## `tidyr` verbs
+
+The `tidyr` verbs `gather()` and `spread()` are used to transform data frames from wide to long format or vice versa, respectively. For example, say you want to store data on GDP for all countries and a set of years. This could be stored in a long format (with columns `country`, `year`, and `gdp`), which would be considered a "tidy" format, or in a wide format (with columns `country`, `gdp2000`, `gdp2001`, ...), which might be better for display purposes. `tidyr` can translate between these formats, and now this can be done with `sf` objects.
+
+Looking at the North Carolina dataset as an example, `BIR74` and `BIR79` are the number of births in the county in 1974 and 1979, respectively. We can easily transpose this with `gather()` into a long format:
+
+```{r gather}
+nc_gathered <- nc %>% 
+  select(county = NAME, BIR74, BIR79, -geometry) %>% 
+  slice(1:3) %>% 
+  gather(year, births, BIR74, BIR79)
+nc_gathered
+```
+
+Notice that the attribute data has been nicely transposed. The result of this is that each feature has two rows and the feature geometries have been duplicated. To me this seems odd to be storing the same geometry in multiple places, so I'm not sure of the use case for `gather()` on `sf` objects.
+
+We can transpose this back to the original wide format with `spread()`:
+
+```{r spread}
+nc_gathered %>% 
+	spread(year, births)
+```
+
+Again, I'm not sure of the use case for this at the moment, but it's nice to have this implemented anyway.

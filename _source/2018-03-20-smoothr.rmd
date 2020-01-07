@@ -1,0 +1,215 @@
+---
+layout: post
+title: "smoothr: spatial feature smoothing in R"
+published: true
+excerpt: >
+  An R package for smoothing out jagged corners and rough edges of polygons to 
+  make curves appear more natual and aesthetically pleasing.
+category: gis
+tags: r gis 
+editor_options: 
+  chunk_output_type: console
+---
+  
+For a project at work, one of my colleagues is generating polygons from raster data, which he then needs to smooth out to turn the sharp corners into smooth, natural looking curves. Although polygon smoothing seems like it should be a fairly commonly used GIS tool, we've been unable to find a good open source solution to this problem. ArcGIS has the [Smooth Polygon](http://desktop.arcgis.com/en/arcmap/10.3/tools/cartography-toolbox/smooth-polygon.htm) tool that works nicely; however, given that smoothing is the final step in a large, automated, R-based workflow on Linux, it's frustrating to have to use a commercial Windows program for the final step. Although I know almost nothing about smoothing algorithms, I did a little Googling and started putting together an R package, So, I introduce [smoothr](http://strimas.com/smoothr/), now on [GitHub](https://github.com/mstrimas/smoothr) and [CRAN](https://cran.r-project.org/package=smoothr).
+
+<img src="/img/smoothr/smooth-raster.gif" alt = "Smoothing Animation" style="display: block; margin: auto;" />
+
+In this post, I'll introduce the package with the hopes of stimulating other, more knowledgeable, folks to help test the package and implement some more advanced smoothing algorithms.
+
+## Setup
+
+```{r packages}
+library(raster)
+library(dplyr)
+library(sf)
+library(smoothr)
+library(viridisLite)
+```
+
+## Example data
+
+This package comes with two simple spatial datasets in `sf` format to test the smoothing algorithms on. `jagged_polygons` contains 9 polygons with sharp corners begging to be smoothed out:
+
+```{r jagged-polygons, echo=FALSE}
+par(mar = c(0, 0, 0, 0), oma = c(4, 0, 0, 0), mfrow = c(3, 3))
+for (i in 1:nrow(jagged_polygons)) {
+  plot(st_geometry(jagged_polygons[i, ]), col = "grey40", border = NA)
+}
+```
+
+Notice that these polygons have a range of complexities, some have holes, and some are mutlipart polygons. I've added a few flags to distinguish between the different types.
+
+```{r jagged-polygons_print, echo=FALSE}
+print(jagged_polygons)
+```
+
+`jagged_lines` contains 9 polylines with disgustingly crooked edges.
+
+```{r jagged-lines, echo=FALSE}
+par(mar = c(0, 0, 0, 0), oma = c(0, 0, 0, 0), mfrow = c(3, 3))
+for (i in 1:nrow(jagged_lines)) {
+  plot(st_geometry(jagged_lines[i, ]), col = "grey20", lwd = 3)
+}
+```
+
+Again, there's a range of complexities, some lines form closed loops, and some are multipart.
+
+```{r jagged-lines_print, echo=FALSE}
+print(jagged_lines)
+```
+
+The final dataset that comes with this package, `jagged_raster`, is a simulated occurrence probability for a species, consisting of a spatially auto-correlated raster layer with values between 0 and 1. This raster can be used to experiment with smoothing polygons generated from rasters.
+
+```{r guass-field, results='hide', dev="png"}
+r <- jagged_raster
+# plot
+par(mar = c(0, 0, 0, 0))
+plot(extent(r), col = NA, axes = FALSE, xlab = NA, ylab = NA)
+plot(r, col = viridis(256), legend = FALSE, box = FALSE, add = TRUE)
+```
+
+## Smoothing methods
+
+Thus far, I've implemented two simple smoothing methods: Chaikin's corner cutting algorithm and spline interpolation. Both are accessed with the `smooth()` function, and all methods work on spatial lines and polygons in `sf` and `sp` format.
+
+### Chaikin's corner cutting algorithm
+
+Chaikin's corner cutting algorithm smooths by iteratively replacing every point by two new points: one 1/4 of the way to the next point and one 1/4 of the way to the previous point. Consult the references below for details, but essentially the idea is to iteratively cut off corners until the curve is smooth. I've found this method to produce fairly natural looking smooth curves, although they're a little more "boxy" than I'd like, and the algorithm has the benefit of only requiring a single parameter: the number of smoothing iterations. 
+
+This method can be applied with `smooth(x, method = "chaikin")`. Here's what this looks like for the polygons:
+
+```{r chaikin-polygons}
+p_smooth_chaikin <- smooth(jagged_polygons, method = "chaikin")
+par(mar = c(0, 0, 0, 0), oma = c(0, 0, 0, 0), mfrow = c(3, 3))
+for (i in 1:nrow(jagged_polygons)) {
+  plot(st_geometry(jagged_polygons[i, ]), col = "grey40", border = NA)
+  plot(st_geometry(p_smooth_chaikin[i, ]), col = NA, border = "#E41A1C", 
+       lwd = 2, add = TRUE)
+}
+```
+
+And for the lines:
+
+```{r chaikin-lines}
+l_smooth_chaikin <- smooth(jagged_lines, method = "chaikin")
+par(mar = c(0, 0, 0, 0), oma = c(0, 0, 0, 0), mfrow = c(3, 3))
+for (i in 1:nrow(jagged_lines)) {
+  plot(st_geometry(jagged_lines[i, ]), col = "grey20", lwd = 3)
+  plot(st_geometry(l_smooth_chaikin[i, ]), col = "#E41A1C", lwd = 2, add = TRUE)
+}
+```
+
+### Spline interpolation
+
+This method applies a spline interpolation to the x and y coordinates independently using the built-in `spline()` function. For polygons (and closed lines), `method = "periodic"` is used to avoid getting a kink at the start/end of the curve defining the boundary. Unlike the corner cutting algorithm, this method results in a curve that passes through the vertices of the original curve, which may be a desirable feature. Unfortunately, this results in an unnaturally wiggly curve. Spline interpolation requires a parameter specifying the number of points to interpolate at, which can either be an absolute number or a relative increase in the number of vertices.
+
+This method can be applied with `smooth(x, method = "spline")`. Here's what this looks like for the polygons:
+
+```{r spline-polygons}
+p_smooth_spline <- smooth(jagged_polygons, method = "spline")
+par(mar = c(0, 0, 0, 0), oma = c(0, 0, 0, 0), mfrow = c(3, 3))
+for (i in 1:nrow(jagged_polygons)) {
+  plot(st_geometry(p_smooth_spline[i, ]), col = NA, border = NA)
+  plot(st_geometry(jagged_polygons[i, ]), col = "grey40", border = NA, 
+       add = TRUE)
+  plot(st_geometry(p_smooth_spline[i, ]), col = NA, border = "#E41A1C", 
+       lwd = 2, add = TRUE)
+}
+```
+
+And for the lines:
+
+```{r spline-lines}
+l_smooth_spline <- smooth(jagged_lines, method = "spline")
+par(mar = c(0, 0, 0, 0), oma = c(0, 0, 0, 0), mfrow = c(3, 3))
+for (i in 1:nrow(jagged_lines)) {
+  plot(st_geometry(l_smooth_spline[i, ]), col = NA)
+  plot(st_geometry(jagged_lines[i, ]), col = "grey20", lwd = 3, add = TRUE)
+  plot(st_geometry(l_smooth_spline[i, ]), col = "#E41A1C", lwd = 2, add = TRUE)
+}
+```
+
+## Raster-to-polygon conversion
+
+The whole point of this `smoothr` business was to smooth out polygons generated from rasters, so let's work through a quick example of that. Treating `jagged_raster` as the occurrence probability for a species, imagine we want to produce a range map for this species, showing where it occurs with at least 50% probability. We can convert the raster to a binary presence/absence map, then polygonize.
+
+```{r polygonize, dev="png"}
+# pres/abs map
+r_pa <- cut(r, breaks = c(-Inf, 0.5, Inf)) - 1
+par(mar = c(0, 0, 0, 0))
+plot(extent(r), col = NA, axes = FALSE, xlab = NA, ylab = NA)
+plot(r_pa, col = c("white", "#4DAF4A"), legend = FALSE, box = FALSE, add = TRUE)
+# polygonize
+pa_poly <- rasterToPolygons(r_pa, function(x){x == 1}, dissolve = TRUE)
+plot(pa_poly, col = NA, border = "grey20", lwd = 1.5, add = TRUE)
+```
+
+Finally, to make this more aesthetically pleasing, I'll smooth out those sharp edges.
+
+```{r smooth-raster, dev="png"}
+pa_poly_smooth <- smooth(pa_poly, method = "chaikin")
+# plot
+par(mar = c(0, 0, 0, 0))
+plot(extent(r), col = NA, axes = FALSE, xlab = NA, ylab = NA)
+plot(pa_poly_smooth, col = "#4DAF4A", border = "grey20", lwd = 1.5, add = TRUE)
+```
+
+Not perfect, it still clearly looks like this range map came from a raster, but those slightly smoother corners are certainly easier on the eyes!
+
+```{r animation, include = FALSE}
+library(animation)
+library(here)
+td <- tempdir()
+# frame 1: original
+png(file.path(td, "smooth-1.png"), width = 600, height = 600)
+par(mar = c(0, 0, 2, 0), mfrow = c(1, 1))
+plot(extent(r), col = NA, axes = FALSE, xlab = NA, ylab = NA,
+     main = "Reclassify", cex.main = 2)
+plot(r_pa, col = c("white", "#4DAF4A"), legend = FALSE, box = FALSE, add = TRUE)
+dev.off()
+# frame 3: polygonize
+png(file.path(td, "smooth-3.png"), width = 600, height = 600)
+par(mar = c(0, 0, 2, 0), mfrow = c(1, 1))
+plot(extent(r), col = NA, axes = FALSE, xlab = NA, ylab = NA,
+     main = "Polygonize", cex.main = 2)
+plot(pa_poly, col = "#4DAF4A", border = "grey20", lwd = 1.5, add = TRUE)
+dev.off()
+# frame 4: smooth
+png(file.path(td, "smooth-4.png"), width = 600, height = 600)
+par(mar = c(0, 0, 2, 0), mfrow = c(1, 1))
+plot(extent(r), col = NA, axes = FALSE, xlab = NA, ylab = NA,
+     main = "Smooth", cex.main = 2)
+plot(pa_poly_smooth, col = "#4DAF4A", border = "grey20", lwd = 1.5, add = TRUE)
+dev.off()
+# animate
+setwd(here("img", "smoothr"))
+frames <- list.files(td, "smooth-[1-4].png$", full.names = TRUE)
+f_animation <- here("img", "smoothr", "smooth-raster.gif")
+ani.options(interval = 1)
+im.convert(frames, f_animation)
+unlink(frames)
+```
+
+## Future development
+
+As it stands, `smoothr` has two decent methods for smoothing out sharp corners on polygons; however, my hope is to build out this package with a little more functionality:
+
+- **Densification:** add a method for densification, i.e. adding extra points to curves. While not really a smoothing algorithm, this could be a precursor to other smoothing algorithms, and it is another GIS tool that doesn't yet exist in R.
+- **Kernel smoothing:** kernel smoothing, with the built-in function `ksmooth()` or the `KernSmooth` package, could be an alternative way of smoothing curves, likely in conjunction with densification.
+- **Local regression:** I have seen some suggestion that local regression (something I'm not even remotely familiar with) could be used for smoothing. There's the built-in `loess()` function as well as the `locfit` package.
+- **PAEK**: ArcGIS refers to their smoothing algorithm as PAEK (Polynomial Approximation with Exponential Kernel), which is apparently described in the appendix of [this paper](https://link.springer.com/chapter/10.1007/3-540-45868-9_22). However, having read the appendix multiple times, I've found their description extremely vague and confusing, possibly intentionally so to keep their algorithm proprietary.
+- **Geographically aware algorithms**: none of the methods I've looked at are geographically aware, they just treat coordinates as Cartesian points in the plane. Is this an issue? If so, is there a better way? I don't know, but hopefully there's someone out there smarter than me that does.
+
+## References
+
+Chaikin's corner cutting algorithm:
+
+- Chaikin, G. An algorithm for high speed curve generation. Computer Graphics and Image Processing 3 (1974), 346–349
+- http://graphics.cs.ucdavis.edu/education/CAGDNotes/Chaikins-Algorithm.pdf
+- [Where to find Python implementation of Chaikin's corner cutting algorithm?](https://stackoverflow.com/a/47255374/3591386)
+
+Spline interpolation:
+
+  - [Create polygon from set of points distributed](https://stackoverflow.com/questions/26087772/26089377)
+  - [Smoothing polygons in contour map?](https://gis.stackexchange.com/questions/24827/24929)

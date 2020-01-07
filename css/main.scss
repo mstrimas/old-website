@@ -1,0 +1,234 @@
+---
+---
+
+/* Skeleton CSS boilerplate */
+@import "skeleton";
+
+/* Variables */
+$navbar-height: 4.8rem;
+$code-box-color: #eef;
+
+a {
+  text-decoration: none;
+}
+
+img {
+  max-width: 100%;
+}
+
+img.center {
+    display: block;
+    margin: 1.2rem auto;
+}
+
+hr.short {
+  max-width: 15rem;
+  height: 0.2rem;
+  color: $dark-grey;
+  background-color: $dark-grey;
+  border: none;
+}
+
+blockquote {
+  color: lighten($font-color, 25%);
+  padding-left: 1rem;
+  border-left: 0.5rem lighten($font-color, 25%) solid;
+}
+
+table {
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.footnotes {
+  font-size: 80%;
+  border-top: 1px $border-color solid;
+  padding-top: 1rem;
+  p {
+    margin: 0;
+    padding-left: 1em;
+    text-indent: -1em;
+  }
+}
+
+// full width images
+.full-width {
+  width: 100vw;
+  position: relative;
+  left: 50%;
+  right: 50%;
+  margin-left: -50vw;
+  margin-right: -50vw;
+}
+  
+// Lists
+li {
+  margin-bottom: 0;
+  margin-left: 0;
+  padding-left: 1em;
+  text-indent: -1em;
+  p {
+    margin-bottom: 1rem;
+    text-indent: 0;
+  }
+}
+
+/* Navigation bar */
+.navbar {
+  position: fixed;
+  display: block;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  width: 100%;
+  height: $navbar-height;
+  background-color: #fff;
+  border-bottom: 1px solid $border-color;
+}
+
+div.content {
+  margin-top: $navbar-height;
+  padding-top: 2.4rem;
+}
+
+.navbar div {
+  line-height: $navbar-height;
+  white-space: nowrap;
+  text-align: center;
+}
+
+// Hide site title on small devices
+.site-title {
+  display: none;
+  visibility: hidden;
+  width: 0;
+}
+
+@media (#{$bp-larger-than-phablet}) {
+  .site-title {
+    display: inline;
+    visibility: visible;
+    color: $font-color;
+    width: auto;
+  }
+  
+  .site-title h4 {
+    font-weight: 600;
+    letter-spacing: 0.1rem;
+  }
+  
+  .navbar div {
+    text-align: left;
+  }
+}
+
+.navbar ul {
+  display: inline;
+  visibility: visible;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 10rem;
+}
+
+@media (#{$bp-larger-than-phablet}) {
+  .navbar ul {
+    float: right;
+  }
+}
+
+.navbar li {
+  display: inline;
+  padding: 0 1.5rem;
+  font-weight: 600;
+}
+ 
+.navbar a {
+  display: inline-block;
+  color: $dark-grey;
+  &:hover {
+    color: $primary-color;
+  }
+}
+
+/* Footer */
+footer {
+  width: 100%;
+  display: block;
+  background-color: $light-grey;
+  border-top: 1px solid $border-color;
+  text-align: center;
+  white-space: nowrap;
+  padding: 0.5rem 0;
+}
+
+.footer-links {
+  display: inline;
+  visibility: visible;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.footer-links li {
+  display: inline;
+  padding: 0 1rem;
+}
+ 
+.footer-links a {
+  display: inline-block;
+  font-size: 3rem;
+  color: $dark-grey;
+  &:hover {
+    color: darken($primary-color, 15%);
+  }
+}
+
+/* Front page */
+.profile {
+  text-align: center;
+}
+
+.avatar img {
+  width: 15rem;
+  height: 15rem;
+  border-radius: 50%;
+  padding: 0;
+  margin-bottom: 1.2rem;
+}
+
+.post-preview {
+  margin: 1.5rem 0;
+}
+
+.post-preview a {
+  color: $dark-grey;
+  &:hover {
+    color: $primary-color;
+  }
+}
+
+.post-title {
+  margin: 0 0 0.25rem 0;
+  padding: 0;
+  border: none;
+  font-weight: 600;
+}
+
+.post-preview p {
+  margin: 0rem;
+}
+
+.post-meta {
+  font-style: italic;
+  color: $dark-grey;
+  a {
+    color: $dark-grey;
+    &:hover {
+      color: $primary-color;
+    }
+  }
+}
+
+@import "syntax";

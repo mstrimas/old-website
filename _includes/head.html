@@ -1,0 +1,57 @@
+<head>
+  
+  <meta charset="utf-8" />
+  <meta content='text/html; charset=utf-8' http-equiv='Content-Type' />
+  <meta http-equiv='X-UA-Compatible' content='IE=edge' />
+  <meta name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1.0' />
+  
+  <title>{% if page.title %}{{ page.title }}{% else %}{{ site.title }}{% endif %}</title>
+  
+  <!-- Meta -->
+  <meta name="author" content="{{ site.author.name }}" />
+  <link rel="shortcut icon" type="image/x-icon" href="/img/favicon.ico?" />
+  {% if page.title %}
+  <meta property="og:title" content="{{ page.title }}" />
+  <meta property="twitter:title" content="{{ page.title }}" />
+  {% else %}
+  <meta property="og:title" content="{{ site.title }}" />
+  <meta property="twitter:title" content="{{ site.title }}" />
+  {% endif %}
+  <meta name="keywords" content="matt strimas-mackey, matthew strimas-mackey, r, gis, spatial analysis, open source, open science">
+  {% if page.excerpt %}
+  <meta name="description" content="{{ page.excerpt | strip_html }}" />
+  <meta property="og:description" content="{{ page.excerpt | strip_html }}" />
+  {% else %}
+  <meta name="description" content="{{ site.description }}">
+  <meta property="og:description" content="{{ site.description }}" />
+  {% endif %}
+  {% if site.avatar %}
+  <meta property="og:image" content="{{ site.avatar | prepend: site.url }}" />
+  {% else %}
+  <meta property="og:image" content="" />
+  {% endif %}
+  
+  <!-- CSS and icons -->
+  <link rel="stylesheet" href="{{ "/css/main.css" | prepend: site.baseurl }}">
+  
+  <!-- Fonts and icons-->
+  <link href='//fonts.googleapis.com/css?family=Raleway:400,300,600' rel='stylesheet' type='text/css' />
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/font-awesome/4.4.0/css/font-awesome.min.css" />
+
+  <!-- MathJax rendering script -->
+  <script async type="text/javascript" src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+  
+  <!-- Search Optimization -->
+  <link rel="canonical" href="{{ page.url | replace:'index.html','' | prepend: site.baseurl | prepend: site.url }}" />
+  
+  <!-- Google Analytics -->
+  <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', '{{ site.google_analytics }}', 'auto');
+  ga('send', 'pageview');
+  </script>
+</head>

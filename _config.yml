@@ -1,0 +1,53 @@
+# --- Serving options --- #
+
+# Site settings
+title:                Matt Strimas-Mackey
+description: >
+    I am a conservation scientist researching tropical land use change and
+    systematic conservation prioritization. I'm also interested in writing
+    software to aid conservation decision making.
+avatar:               "/img/avatar.png"
+baseurl:              ""
+url:                  "http://strimas.com/"
+google_analytics:     "UA-71616772-1"
+github_repo: "https://github.com/mstrimas/mstrimas.github.io/"
+disqus:               mstrimas
+
+# Jekyll build settings
+permalink:            /:categories/:title/
+markdown:             kramdown
+kramdown:
+  auto_ids: true
+  input: GFM
+highlighter:          rouge
+excerpt_separator:    "<!-- more -->"
+timezone:             "America/Vancouver"
+sass:
+  sass_dir:           _sass
+  style:              compressed
+
+# List of links in the navigation bar
+navbar-links:
+  Posts:              ""
+  About:              "about"
+  Code:               "http://www.github.com/mstrimas"
+
+# Author information
+author:
+  name:               Matt Strimas-Mackey
+  email:              strimas@zoology.ubc.ca
+  github:             mstrimas
+  twitter:            StrimasMackey
+  stackoverflow:      "26661/matt-sm"
+
+# Exclude these files from production site
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - LICENSE
+  - README.md
+  - mstrimas.github.com.Rproj
+  - CNAME
+  - .Rhistory
+  - .Rprofile
+  - .gitignore

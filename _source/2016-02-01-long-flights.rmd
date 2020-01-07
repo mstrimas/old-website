@@ -1,0 +1,597 @@
+---
+layout: post
+title: "Mapping the Longest Commericial Flights in R"
+published: true
+excerpt: >
+  Mapping the longest regularly scheduled commercial flights in the world using
+  R and ggplot2. Includes a discussion of the challenges associated with maps
+  for which the central meridian is not at Greenich.
+category: spatial
+tags: r spatial gis
+---
+
+```{r echo = F, include = F, eval = F}
+setwd("_source/")
+```
+
+On more than one occasion I've taken the brutally long-haul flight from Toronto to Hong Kong with Air Canada. Given that I'm totally unable to sleep on planes, almost 16 hours crammed into a tiny economy class seat is pretty rough! This got me thinking: what is the longest regularly scheduled, commercial long-haul flight?
+
+Wikipedia has the answer (no surprise) in the form of a table listing the [top 30 longest flights by distance](https://en.wikipedia.org/wiki/Non-stop_flight#Longest_flights). Turns out the longest flight is from Dallas to Sydney, clocking in at almost 17hours and 13,804 km. This is 1.5 hours longer than my Hong Kong-Toronto flight, which comes in at number 24 on the list.
+
+Of course, I couldn't resist scraping these data from Wikipedia and mapping the flights. I'll use this opportunity to practice plotting with ggplot, since I've recently been trying to gain more experience using this package for mapping spatial data.
+
+**Note:** while in the process of making this map, I found a post on the [Vizual Statistix](http://vizual-statistix.tumblr.com/search/flights) blog with a very similar idea. However, he doesn't discuss how the map is map or provide source code.
+
+**If you don't care about R, [skip to the bottom](#finishing-touches) for the final map.**
+
+## Required packages
+
+```{r packages, cache=F}
+library(knitr)
+library(sp)
+library(raster)
+library(rgdal)
+library(rgeos)
+library(geosphere)
+library(tidyverse)
+library(rvest)
+library(stringr)
+library(lubridate)
+library(ggmap)
+library(ggrepel)
+library(ggalt)
+library(viridis)
+```
+
+# Scraping and cleaning
+
+The `rvest` package makes web scraping a breeze. I just read the html, extract out any tables, pick the first table on the page (this is the only one I'm interested in), and parse it into a dataframe with `html_table()`.
+
+```{r wiki-data, cache=T}
+flights <- read_html('https://en.wikipedia.org/wiki/Longest_flights') %>% 
+  html_nodes('.wikitable') %>% 
+  `[[`(1) %>% 
+  html_table(fill = TRUE) %>% 
+  set_names(c("rank", "from", "to", "airline", "flight_no", "distance",
+              "duration", "aircraft", "first_flight"))
+```
+
+As usual there are some issues with the imported data. The following issues will need addressing and there are a variety of issues here:
+
+1. Destinations sometimes have city and airport
+1. Some routes have multiple flight numbers for the same airline
+1. Distances are given in three units all within the same cell
+1. Durations aren't in a nice format to work with
+1. Some routes have different durations for winter and summer
+
+Nothing `stringr` and some regular expressions can't handle!
+
+```{r clean}
+# make multiple flight numbers comma separated
+flights <- flights %>% 
+  mutate(flight_no = str_replace_all(flight_no, "\n", ","),
+         flight_no = str_replace_all(flight_no, "[:space:]", ""))
+# only consider distances in km, convert to integer
+flights <- flights %>% 
+  mutate(distance = str_extract(distance, "^[0-9,]+"),
+         distance = parse_number(distance))
+# convert duration to minutes and separate into summer/winter schedules
+time_to_min <- function(x) {
+  str_extract(x, "[:digit:]{2}:[:digit:]{2}$") %>% 
+  str_split(":") %>% 
+  map_dbl(~ sum(as.integer(.x) * c(60, 1)))
+}
+flights <- flights %>% 
+  mutate(duration = time_to_min(duration))
+# select variabless
+flights <- flights %>% 
+  mutate(route = paste(from, to, sep = "–")) %>% 
+  dplyr::select(rank, route, from, to, airline, flight_no, distance, duration)
+```
+
+Now the table is in a nice clean format and ready for display.
+
+```{r flight-table}
+dplyr::select(flights, rank, route, airline, distance, duration) %>% 
+  kable(format.args =  list(big.mark = ','),
+        col.names = c("rank", "route", "airline", "distance (km)", "duration (min)"))
+```
+
+# Geocoding
+
+If I'm going to map these flights, I'll need coordinates for each city in the dataset. Fortunately, the `ggmaps` package has a function for geocoding locations based on their name using Google Maps.
+
+```{r geocode, cache=T}
+cities <- c(flights$from, flights$to) %>% 
+  unique() %>% 
+  data_frame(city = .) %>% 
+  mutate(cty_cnt = if_else(city == "Melbourne", "Melbourne, Australia", 
+                           city)) %>% 
+  # geocode
+  mutate(locs = map(cty_cnt, geocode, output = "latlon", source = "google", 
+                    messaging = FALSE)) %>% 
+  unnest() %>% 
+  select(-cty_cnt)
+```
+
+Now I bring these coordinates into the `flights` dataframe.
+
+```{r flight-coords}
+flights <- flights %>% 
+  left_join(cities, by = c("from" = "city")) %>% 
+  rename(lng_from = lon, lat_from = lat) %>% 
+  left_join(cities, by = c("to" = "city")) %>% 
+  rename(lng_to = lon, lat_to = lat)
+```
+
+# Flight paths
+
+A [great circle](https://en.wikipedia.org/wiki/Great_circle) is the path on a spherical surface (such as the Earth) that gives the shortest distance between two points. Although I have no way of knowing what the actual flight path is for these routes, it's likely to be reasonably approximated by a great circle. First I subset the flights dataset to only include unique routes.
+
+```{r flight-subset}
+flights_unique <- flights %>%
+  group_by(route) %>% 
+  filter(row_number(desc(duration)) == 1)
+```
+
+Then I use the `geosphere` package to get great circle routes for each of the above flights. Since flights over the Pacific cross the International Date Line, I use `breakAtDateLine = TRUE` to ensure the great circle lines are broken as they cross.
+
+```{r gc}
+gc_routes <- gcIntermediate(flights_unique[c("lng_from", "lat_from")],
+                            flights_unique[c("lng_to", "lat_to")],
+                            n = 360, addStartEnd = TRUE, sp = TRUE, 
+                            breakAtDateLine = TRUE)
+gc_routes <- SpatialLinesDataFrame(gc_routes, 
+                                   data.frame(rank = flights_unique$rank,
+                                              route = flights_unique$route,
+                                              stringsAsFactors = FALSE))
+row.names(gc_routes) <- as.character(gc_routes$rank)
+```
+
+# Global map
+
+As a background on which to map the flight paths, I'll use the global map provided by [Natural Earth](http://www.naturalearthdata.com).
+
+```{r boundaries, cache = T}
+base_url <- 'http://www.naturalearthdata.com/http//www.naturalearthdata.com/download/'
+tf <- tempfile()
+download.file(paste0(base_url, '110m/cultural/ne_110m_admin_0_countries_lakes.zip'), tf)
+unzip(tf, exdir = 'data/long-flights/', overwrite = TRUE)
+unlink(tf)
+world <- shapefile('data/long-flights/ne_110m_admin_0_countries_lakes.shp')
+```
+
+`ggplot` can't handle spatial objects directly, it only works with data frames. So, I use the `fortify()` function to convert each spatial object to a data frame ready for plotting.
+
+```{r fortify}
+world_df <- fortify(world)
+gc_routes_df <- fortify(gc_routes)
+```
+
+# Mapping
+
+Now that all the data are prepared, I'll create the map. Rather than just showing the final product, I'll build it up in steps in the hope that it'll be instructive.
+
+## First attempt
+
+All coordinates are currently in unprojected (i.e. lat/long) coordinates, I project them to the [Kavrayskiy VII projection](https://en.wikipedia.org/wiki/Kavrayskiy_VII_projection), a nice compromise projection for global maps. Typically, I'd project all my spatial data with `sp::spTransform()` before plotting, but here I'll make use of the new `coord_proj()` function from the [`ggalt` package](https://github.com/hrbrmstr/ggalt) package, which projects coordinates on the fly.
+
+```{r first-map, fig.width=960/96, fig.height=600/96}
+ggplot() +
+  geom_polygon(data = world_df, aes(long, lat, group = group), 
+               fill = "grey80", color = "grey60", size = 0.1) +
+  geom_point(data = cities, aes(lon, lat), color = "grey20", size = 0.5) +
+  geom_path(data = gc_routes_df, 
+            aes(long, lat, group = group), alpha = 0.5, color = "#fa6900") +
+  geom_text(data = cities, aes(lon, lat, label = city),
+            size = 3, color = "grey20", alpha = 0.9, nudge_y = 2, 
+            check_overlap = TRUE) +
+  coord_proj("+proj=kav7") +
+  scale_x_continuous(breaks = seq(-180, 180, 30)) +
+  scale_y_continuous(breaks = seq(-90, 90, 15)) +
+  theme(panel.grid.major = element_line(size = 0.5, linetype = 2),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+```
+
+Looks OK, but there's tons of room for improvement.
+
+## Changing central meridian
+
+The default Kavrayskiy VII projection takes the Greenwich Prime Meridian as its central meridian. This is a poor choice in this case since most routes have a North American city at one end, which results in many of the routes going off the edge of the map. Centering the map on the US (around 90°W) seems the best bet, but this puts the edges of the map at 90°E, right in the middle of Asia. This makes a mess of the polygons spanning the edge.
+
+```{r messy-boundary, fig.width=400/96, fig.height=200/96}
+central_meridian <- -90
+proj <- sprintf("+proj=kav7 +lon_0=%i", central_meridian)
+ggplot() +
+  geom_polygon(data = world_df, aes(long, lat, group = group), 
+               fill = "grey80", color = "grey60", size = 0.1) +
+  geom_path(data = gc_routes_df, 
+            aes(long, lat, group = group), alpha = 0.5, color = "#fa6900") +
+  coord_proj(proj, ylim = c(-60, 90)) +
+  theme(panel.grid.major = element_line(size = 0.5, linetype = 2),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+```
+
+Sorting this issue out turned out to be a much bigger challenge than I expected; it seems there's no elegant solution in R. The `nowrapRecenter()` function from the `maptools` package is meant to address this issue, but it only appears to work when the date line is the new center and it still leads to artifacts when the data are projected. Simply removing a small sliver of the polygons at what will become the edge in the new projection works, but this means removing data, it results in a world map that looks chopped off at the edges, and gives a seam at the date line.
+
+```{r trim_edge, fig.width=480/96, fig.height=300/96}
+trim_edge <- function(x, lng_center, edge_tol = 1e-8) {
+  if (lng_center < -180 || lng_center > 180) {
+    stop("invalid longitude")
+  }
+  
+  if (is.projected(x) || is.na(is.projected(x))) {
+    stop("trim_edge only works with unprojected coordinates")
+  }
+  
+  edge <- (lng_center + 360) %% 360 - 180
+  clip <- as(extent(edge, edge + edge_tol, -90, 90), "SpatialPolygons")
+  projection(clip) <- projection(x)
+  row.names(clip) <- "edge"
+  gd <- gDifference(x, clip, byid = TRUE)
+  # return features ids to original values
+  row.names(gd) <- gsub(" edge$", "", row.names(gd))
+  # bring back attribute data
+  if (inherits(x, "SpatialPolygonsDataFrame")) {
+    gd <- SpatialPolygonsDataFrame(gd, x@data, match.ID = TRUE)
+  } else if (inherits(x, "SpatialLinesDataFrame")) {
+    gd <- SpatialLinesDataFrame(gd, x@data, match.ID = TRUE)
+  }
+  gd
+}
+world_trimmed <- trim_edge(world, central_meridian) %>% 
+  fortify
+ggplot() +
+  geom_polygon(data = world_trimmed, aes(long, lat, group = group), 
+               fill = "grey80", color = "grey60", size = 0.1) +
+  coord_proj(proj)
+```
+
+Pretty close, but I'm quite picky about aesthetics so this isn't going to cut it! After much frustration, I went with a fairly hacky solution, which requires two functions that split the map into two at what will become the new edge, project it, then manually flip polygon vertices on the left edge that should actually be on the right edge.
+
+```{r hacky}
+split <- function(x, edge, spacing = 0.1) {
+  if (edge < -180 || edge > 180) {
+    stop("invalid longitude")
+  }
+  if (is.projected(x) || is.na(is.projected(x))) {
+    stop("split only works with unprojected coordinates")
+  }
+  
+  if (is.na(spacing)) {
+    lat_seq <- c(-90, 90)
+  } else {
+    lat_seq <- seq(-90, 90, length.out = ceiling(180 / spacing))
+  }
+  left <- rbind(
+    data.frame(long = c(edge, -180, -180, edge), lat = c(90, 90, -90, -90)),
+    data.frame(long = edge, lat = lat_seq)) %>% 
+    {SpatialPolygons(list(Polygons(list(Polygon(.)), "left")))}
+  right <- rbind(
+    data.frame(long = c(edge, 180, 180, edge), lat = c(90, 90, -90, -90)),
+    data.frame(long = edge, lat = lat_seq)) %>% 
+    {SpatialPolygons(list(Polygons(list(Polygon(.)), "right")))}
+  sides <- rbind(left, right)
+  projection(sides) <- projection(x)
+  
+  # add original id as attribute
+  gi <- gIntersection(x, sides, byid = TRUE, drop_lower_td = TRUE)
+  ids <- data.frame(.id = gsub(" (left|right)$", "", row.names(gi)),
+                    stringsAsFactors = TRUE)
+  row.names(ids) <- row.names(gi)
+  if (inherits(gi, "SpatialPolygons")) {
+    gi <- SpatialPolygonsDataFrame(gi, ids, match.ID = TRUE)
+  } else if (inherits(gi, "SpatialLines")) {
+    gi <- SpatialLinesDataFrame(gi, ids, match.ID = TRUE)
+  }
+  
+  # bring back attribute data
+  if ("data" %in% slotNames(x)) {
+    df <- x@data
+    df$.id <- row.names(x)
+    gi <- merge(gi, df, by = ".id")
+  }
+  return(gi)
+}
+
+project_recenter <- function(x, proj, union_field, union_scale = getScale()) {
+  if (!(missing(union_field) || union_field == ".id" ||
+        ("data" %in% slotNames(x) && union_field %in% names(x)))) {
+    stop("invalid union_field; must be an attribute")
+  }
+  # find center from proj4 string
+  central_meridian <- proj %>% 
+    {regmatches(., regexec("\\+lon_0=([-0-9]+)", .))[[1]][2]} %>% 
+    as.integer
+  if(is.na(central_meridian)) {
+    stop("Must specify lon_0 in proj4 string.")
+  }
+  
+  # split at edge and project
+  edge <- (central_meridian + 360) %% 360 - 180
+  edge_sl <- sprintf("LINESTRING(%s -90,%s 90)", edge, edge) %>% 
+    readWKT(p4s = projection(x))
+  if (all(!gIntersects(x, edge_sl, byid = TRUE)) || central_meridian == 0) {
+    return(x)
+  }
+  x_proj <- spTransform(split(x, edge), proj)
+  
+  # fix points on boundary that have been projected onto opposite boundary
+  l <- gIntersects(x_proj, spTransform(edge_sl, proj), byid = TRUE)[1,]
+  l <- which(l & grepl(ifelse(edge > 0, "right$", "left$"), names(l)))
+  if (inherits(x_proj, "SpatialPolygons")) {
+    for (i in l) {
+      for (j in 1:length(x_proj@polygons[[i]]@Polygons)) {
+        if (edge > 0) {
+          prob <- which(x_proj@polygons[[i]]@Polygons[[j]]@coords[,1] > 0)
+        } else {
+          prob <- which(x_proj@polygons[[i]]@Polygons[[j]]@coords[,1] < 0)
+        }
+        x_proj@polygons[[i]]@Polygons[[j]]@coords[prob, 1] <-
+          -x_proj@polygons[[i]]@Polygons[[j]]@coords[prob, 1]
+      }
+    }
+    #x_proj <- clgeo_Clean(x_proj)
+    s <- getScale()
+    setScale(union_scale)
+    if (!missing(union_field)) {
+      x_proj <- gUnaryUnion(x_proj, id = x_proj@data[, union_field])
+    }
+    setScale(s)
+  } else if (inherits(x_proj, "SpatialLines")) {
+    for (i in l) {
+      for (j in 1:length(x_proj@lines[[i]]@Lines)) {
+        if (edge > 0) {
+          prob <- which(x_proj@lines[[i]]@Lines[[j]]@coords[,1] > 0)
+        } else {
+          prob <- which(x_proj@lines[[i]]@Lines[[j]]@coords[,1] < 0)
+        }
+        x_proj@lines[[i]]@Lines[[j]]@coords[prob, 1] <-
+          -x_proj@lines[[i]]@Lines[[j]]@coords[prob, 1]
+      }
+    }
+    s <- getScale()
+    setScale(union_scale)
+    if (!missing(union_field)) {
+      x_proj <- gLineMerge(x_proj, id = x_proj@data[, union_field])
+    }
+    setScale(s)
+  }
+  return(x_proj)
+}
+```
+
+A lot of work for such a seemingly simple task! Unfortunately, this approach means moving away from the lovely `coord_proj()` function from the new `ggalt` package. On the up side, I believe this approach is fairly general and produces the nicest results. Before I proceed, I need to reproject the routes and points. Furthermore, I no longer want the routes to be split at the Date Line, so I regenerate them.
+
+```{r gc-nodl}
+# routes
+routes_nodl <- gcIntermediate(flights_unique[c("lng_from", "lat_from")],
+                              flights_unique[c("lng_to", "lat_to")],
+                              n = 360, addStartEnd = TRUE, sp = TRUE, 
+                              breakAtDateLine = FALSE)
+routes_nodl <- SpatialLinesDataFrame(routes_nodl, 
+                                     data.frame(rank = flights_unique$rank,
+                                                route = flights_unique$route,
+                                                stringsAsFactors = FALSE))
+row.names(routes_nodl) <- as.character(routes_nodl$rank)
+# Auckland routes cross edge
+crosses_edge <- (routes_nodl$route %in% c("Auckland–Dubai", "Auckland–Doha"))
+crosses_edge_sl <- project_recenter(routes_nodl[crosses_edge, ], proj,
+                                    union_field = "rank",
+                                    union_scale = 1e6)
+crosses_edge_sl$rank <- routes_nodl[crosses_edge, ]$rank
+crosses_edge_sl$route <- routes_nodl[crosses_edge, ]$route
+row.names(crosses_edge_sl) <- row.names(routes_nodl[crosses_edge, ])
+routes_kav_df <- spTransform(routes_nodl[!crosses_edge, ], proj) %>% 
+  rbind(crosses_edge_sl, .) %>% 
+  fortify
+# cities
+cities_wgs <- cities
+coordinates(cities_wgs) <- ~ lon + lat
+projection(cities_wgs) <- projection(world)
+cities_kav_df <- spTransform(cities_wgs, proj) %>% 
+  as_tibble()
+```
+
+Plotting the newly centered data.
+
+```{r meridian, fig.width=480/96, fig.height=300/96}
+world_kav_df <- project_recenter(world, proj, union_field = "sov_a3", 
+                                 union_scale = 1e6) %>% 
+  fortify()
+ggplot() +
+  geom_polygon(data = world_kav_df, aes(long, lat, group = group), 
+               fill = "grey80", color = "grey60", size = 0.1) +
+  geom_point(data = cities_kav_df, aes(lon, lat), color = "grey20", size = 0.5) +
+  geom_path(data = routes_kav_df, aes(long, lat, group = group), 
+            alpha = 0.5, color = "#fa6900") +
+  geom_text(data = cities_kav_df, aes(lon, lat, label = city),
+            size = 3, color = "grey20", alpha = 0.9, nudge_y = 2, 
+            check_overlap = TRUE) +
+  theme(panel.grid.major = element_line(size = 0.5, linetype = 2),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+```
+
+## Bounding box and graticules
+
+`ggplot` colours the whole background the same colour, including the corners which aren't actually part of the globe. Also, now that I'm no longer using `coord_proj`, I'll have to define my own graticules. To fix this I'll define functions to create a bounding box:
+
+```{r bbox, cache=T}
+make_bbox <- function(lng, lat, spacing, proj) {
+  if (is.na(spacing[1])) {
+    lng_seq <- lng
+  } else {
+    lng_seq <- seq(lng[1], lng[2], length.out = ceiling(diff(lng) / spacing[1]))
+  }
+  if (is.na(spacing[2])) {
+    lat_seq <- lat
+  } else {
+    lat_seq <- seq(lat[1], lat[2], length.out = ceiling(diff(lat) / spacing[2]))
+  }
+  bb <- rbind(
+    data.frame(lng = lng_seq, lat = lat[1]),
+    data.frame(lng = lng[2], lat = lat_seq),
+    data.frame(lng = rev(lng_seq), lat = lat[2]),
+    data.frame(lng = lng[1], lat = rev(lat_seq))
+  ) %>% 
+  {SpatialPolygons(list(Polygons(list(Polygon(.)), "bb")))}
+  if (!missing(proj)) {
+    projection(bb) <- proj
+  }
+  return(bb)
+}
+bb <- make_bbox(c(-180, 180), c(-90, 90), spacing = c(NA, 0.1), proj = projection(world))
+```
+
+And graticules:
+
+```{r graticules}
+lng_label <- function(x) {
+  ifelse(x < 0, paste0("E", abs(round(x))), paste0("W", round(x)))
+}
+lat_label <- function(x) {
+  ifelse(x < 0, paste0("S", abs(round(x))), paste0("N", round(x)))
+}
+make_graticules <- function(lng_breaks, lat_breaks, spacing, proj) {
+  if (is.na(spacing[1])) {
+    lng_seq <- c(-180, 180)
+  } else {
+    lng_seq <- seq(-180, 180, length.out = ceiling(360 / spacing[1]))
+  }
+  if (is.na(spacing[2])) {
+    lat_seq <- c(-90, 90)
+  } else {
+    lat_seq <- seq(-90, 90, length.out = ceiling(180 / spacing[2]))
+  }
+  meridians <- lapply(lng_breaks, 
+                      function(x, lat_seq) {
+                        Lines(list(Line(cbind(x, lat_seq))), ID = lng_label(x))
+                      }, lat_seq)
+  parallels <- lapply(lat_breaks, 
+                      function(x, lng_seq) {
+                        Lines(list(Line(cbind(lng_seq, x))), ID = lat_label(x))
+                      }, lng_seq)
+  grat <- SpatialLines(c(meridians, parallels))
+  if (!missing(proj)) {
+    projection(grat) <- proj
+  }
+  return(grat)
+}
+grat <- make_graticules(seq(-150, 180, 30), seq(-90, 90, 30), 
+                        spacing = c(10, 1), proj = projection(world))
+```
+
+These will also need to be projected, re-centered, and converted to data frames for ggplot.
+
+```{r bbox-recenter}
+bb_df <- project_recenter(bb, proj, union_field = ".id", union_scale = 1e6) %>% 
+  fortify
+grat_df <- project_recenter(grat, proj) %>% 
+  fortify
+```
+
+Including these in the plot.
+
+```{r add-bbox, fig.width=480/96, fig.height=300/96}
+ggplot() +
+  geom_polygon(data = bb_df, aes(long, lat, group = group),
+               fill = "light blue", color = NA) +
+  geom_path(data = grat_df, aes(long, lat, group = group),
+            color = "grey60", size = 0.1) +
+  geom_polygon(data = world_kav_df, aes(long, lat, group = group), 
+               fill = "grey80", color = "grey60", size = 0.1) +
+  geom_point(data = cities_kav_df, aes(lon, lat), color = "grey20", size = 0.5) +
+  geom_path(data = routes_kav_df, aes(long, lat, group = group), 
+            alpha = 0.5, color = "#fa6900") +
+  geom_polygon(data = bb_df, aes(long, lat, group = group),
+               fill = NA, color = "grey20") +
+  geom_text(data = cities_kav_df, aes(lon, lat, label = city),
+            size = 3, color = "grey20", alpha = 0.9, nudge_y = 2, 
+            check_overlap = TRUE) +
+  theme_nothing()
+```
+
+Finally, after a huge amount of work, this North America centered projection is looking good.
+
+## Finishing touches
+
+Now for the finishing touches: adding nicer labels with `ggrepel`, fine tuning the overall formatting, and colouring the routes according to duration. This last task requires joining the flight attribute data to the data frame of spatial data.
+
+```{r join-flights}
+routes_att_df <- mutate(flights_unique, id = as.character(rank)) %>% 
+  left_join(routes_kav_df, ., by = "id")
+```
+
+Then applying a color gradient to the routes. I use the excellent `viridis` package here, which provides perceptually uniform and colour blind friendly colour gradients.
+
+```{r final, img.link=T, dev='png', fig.width=960/96, fig.height=600/96}
+set.seed(1)
+ggplot() +
+  geom_polygon(data = bb_df, aes(long, lat, group = group),
+               fill = "light blue", color = NA) +
+  geom_path(data = grat_df, aes(long, lat, group = group),
+            color = "grey60", size = 0.1) +
+  geom_polygon(data = world_kav_df, aes(long, lat, group = group), 
+               fill = "grey80", color = "grey60", size = 0.1) +
+  geom_path(data = routes_att_df, aes(long, lat, group = group, color = duration / 60),
+            size = 0.6) +
+  geom_point(data = cities_kav_df, aes(lon, lat), color = "grey20", size = 0.5) +
+  geom_polygon(data = bb_df, aes(long, lat, group = group),
+               fill = NA, color = "grey20") +
+  annotate("text", x = 0.25 * max(bb_df$long), y = 0.97 * min(bb_df$lat), 
+           label = "strimas.com - data source: wikipedia", 
+           color = "grey20", size = 3, family = "Times") +
+  geom_text_repel(data = cities_kav_df, aes(lon, lat, label = city),
+                  size = 3, color = "white", fontface = "bold",
+                  segment.color = "black", segment.size = 0.25,
+                  box.padding = unit(0.1, 'lines'), force = 0.1) +
+  # colour gradient applied to routes, and corresponding legend
+  scale_color_viridis(name = "Top 25 Longest Non-stop Flights\n", option = "D",
+                      breaks = c(16, 16.5, 17),
+                      labels = c("16h", "16h30m", "17h")) +
+  guides(color = guide_colorbar(
+    nbin = 256, title.position = "top", title.hjust = 0.5, 
+    barwidth = unit(18, "lines"), barheight = unit(1, "lines"))) +
+  # reduce axis padding
+  scale_x_continuous(expand = c(0.01, 0)) +
+  scale_y_continuous(expand = c(0.01, 0)) +
+  # 1:1 ratio between x and y scales
+  coord_equal() +
+  #blank_theme +
+  theme(text = element_text(family = "Helvetica"),
+        plot.margin = unit(c(0, 0, 0, 0), "lines"),
+        # position legend within plot
+        legend.position = c(0.5, 0.13),
+        legend.direction = "horizontal",
+        legend.background = element_rect(color = "grey20"),
+        legend.title = element_text(size = 16, lineheight = 0.1),
+        # remove axes
+        axis.line = element_blank(),
+        axis.text.x = element_blank(), axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.x = element_blank(), axis.title.y = element_blank(),
+        # remove grid
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.background = element_blank())
+```
+
+```{r final-table, echo=F}
+dplyr::select(flights_unique, route, airline, distance, duration) %>% 
+  ungroup %>% 
+  arrange(desc(duration)) %>% 
+  {cbind(rank = 1:nrow(.), .)} %>% 
+  mutate(duration = round(duration / 60, 2)) %>% 
+  kable(format.args =  list(big.mark = ','),
+        col.names = c("rank", "route", "airline", "distance (km)", "duration (hours)"))
+```
+
+Overall, I'm increasingly impressed with ggplot as a tool for mapping and I think the new packages [ggalt](https://github.com/hrbrmstr/ggalt) and [ggrepel](https://github.com/slowkow/ggrepel) are great additions. Unfortunately, making a map with a non-standard central meridian is a huge pain in R, but in the end I'm quite happy with the results!

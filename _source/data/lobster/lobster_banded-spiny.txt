@@ -1,0 +1,21 @@
+You Asked For the Following:
+Year           : From:1950 To: 2016
+State            : All States By State
+Species          : LOBSTER, BANDED SPINY
+"Year","State","Species","Metric Tons","Pounds","$"
+"2000","Hawaii","LOBSTER, BANDED SPINY","               4.7","          10,394","         121,196"
+"2001","Hawaii","LOBSTER, BANDED SPINY","               3.6","           7,964","          96,094"
+"2002","Hawaii","LOBSTER, BANDED SPINY","               4.3","           9,527","         121,060"
+"2003","Hawaii","LOBSTER, BANDED SPINY","               2.5","           5,541","          66,551"
+"2004","Hawaii","LOBSTER, BANDED SPINY","               2.2","           4,870","          57,893"
+"2005","Hawaii","LOBSTER, BANDED SPINY","               4.6","          10,091","         110,927"
+"2006","Hawaii","LOBSTER, BANDED SPINY","               2.8","           6,178","          59,527"
+"2007","Hawaii","LOBSTER, BANDED SPINY","               3.6","           7,845","          92,908"
+"2008","Hawaii","LOBSTER, BANDED SPINY","               4.5","           9,912","         120,317"
+"2009","Hawaii","LOBSTER, BANDED SPINY","               5.0","          11,000","         136,072"
+"2010","Hawaii","LOBSTER, BANDED SPINY","               4.3","           9,419","         116,492"
+"2011","Hawaii","LOBSTER, BANDED SPINY","               4.5","          10,013","         104,073"
+"2012","Hawaii","LOBSTER, BANDED SPINY","               3.7","           8,256","          97,878"
+"2013","Hawaii","LOBSTER, BANDED SPINY","               4.0","           8,823","          94,673"
+"2014","Hawaii","LOBSTER, BANDED SPINY","               4.6","          10,172","         104,091"
+"2016","Hawaii","LOBSTER, BANDED SPINY","               1.4","           3,191","          27,430"

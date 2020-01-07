@@ -1,0 +1,284 @@
+---
+layout: post
+title: "PostgreSQL/PostGIS II: Geometry Types and Coordinate Systems"
+published: true
+excerpt: >
+  An introduction to the spatial database management system PostGIS, with a focus
+  on using R as an interface to PostGIS. In this post I provide an overview of 
+  the different spatial data types and the use of coordinate systems in PostGIS.
+category: Spatial
+tags: R Spatial GIS
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+```
+
+This is the second in a series of posts about using PostgreSQL and PostGIS as a spatial database management system. In the [previous post](/spatial/r-postgis-1/), I outlined how to get PostgreSQL/PostGIS set up on a Mac and how to get R talking to PostgreSQL. In this post, I'll outline the spatial data types that are available for representing geographical features.
+
+# Before we start
+
+## SQL
+
+Structured Query Language (SQL) is a programming language specifically designed for querying relational databases. All the major relational database management systems use SQL, including PostgreSQL, so you'll need to have at least some familiarity with it if you want to use PostGIS. Fortunately, it's an easy language to learn and there are a variety of great tutorials online, for example the [one from w3 school](http://www.w3schools.com/sql/default.asp) is good.
+
+## Interacting with PostgreSQL
+
+The focus of this series of posts will be on using R as a front end for PostGIS, however, a standard installation of PostgreSQL comes with two handy tools for interacting with PostgreSQL databases. **psql** is a command-line based client for working with PostgreSQL databases. **pgAdmin** is a full featured, cross-platform GUI client for PostgreSQL. You can visually explore the structure of your database and run SQL queries on tables within the database. For this post, I'll take a break from R, and work with pgAdmin.
+
+It's worth noting that pgAdmin is not a GIS, so you won't be able to look at your spatial features visually using this tool. Fortunately, the open source GIS software [QGIS](http://www.qgis.org/en/site/) offers a great GUI interface for working with spatial features in a PostGIS database.
+
+## Creating a PostGIS-enabled database
+
+For this tutorial, we'll need a PostgreSQL database with the PostGIS extension enabled. I covered how to do this in the previous post, but to recap, just run the following SQL statements to create a PostGIS-enabled database named `gistest`:
+
+```sql
+-- Create a new database
+CREATE DATABASE gistest;
+-- Enable PostGIS
+CREATE EXTENSION postgis;
+-- Enable Topology
+CREATE EXTENSION postgis_topology;
+```
+
+# Geometry data types
+
+In relational databases, collections of related data are stored in **tables**, which are composed of **rows** and **columns**. Each **column** (or **variable**) contains values of the same type that measure the same underlying attribute or property. Meanwhile, each **row** (or **observation**) contains values that belong to the same unit or entity. For example, in a table of birds, each row could correspond to a different bird species, while columns would measure attributes of those species (mass, habitat, diet, conservation status, etc.).
+
+| species              | family       | habitat    | mass_grams | threatened |
+|----------------------|--------------|------------|:----------:|:----------:|
+| Blackburnian Warbler | Parulidae    | forest     |     10     |    FALSE   |
+| Northern Pintail     | Anatidae     | lakes      |    1000    |    FALSE   |
+| Snowy Plover         | Charadriidae | shorelines |     45     |    TRUE    |
+
+Notice that each columns consists of values of the same data type (character, numeric, logical, etc.). PostGIS extends PostgreSQL to include an additional **geometry** data type, which allows tables to store geographical features in addition to attribute data. Creating a new table in your database with a geometry column is simple:
+
+```sql
+CREATE TABLE spatial_table (id integer, name varchar, geom geometry);
+```
+
+Geometry columns, like shapefiles, are designed to store vector geometries, i.e. points, lines, and polygons. However, unlike shapefiles, PostGIS geometry columns can contain a mixture of different geometry types. For example, in a single column, one value might be a point while another might be a polygon.
+
+## Simple Features and Well-known Text
+
+The geometry data type in PostGIS is based on the [**Simple Features for SQL**](https://en.wikipedia.org/wiki/Simple_Features) standard developed by the [Open Geospatial Consortium(OGC)](https://en.wikipedia.org/wiki/Open_Geospatial_Consortium) as a standardized way of storing and accessing spatial data in a relational database. This standard defines a variety of feature types that can be stored in geometry columns, including the familiar points, lines, and polygons. Internally, PostGIS stores geometry objects in a binary format that is not human-readable, however, the OGC has also defined a human-readable markup language for representing geometries: Well-known Text (WKT). For example, a point would be represented by `POINT (30 10)`. Geometry objects can be added to or output from a PostGIS table in this standard format.
+
+## Geometry primitives
+
+Vector geometries represent real-world objects as simple geometric abstractions. The basic geometry primitives that make up these abstractions are: points, linestrings (aka lines), and polygons. A **point** consists of a single X and Y coordinate, a **linestring** is an ordered series of points representing a path between locations, and a **polygon** is a closed linestring with the same start and end points, possibly with interior holes composed of other closed linestrings. The WKT representation of these geometry types is as follows<sup id="a1">[1](#f1)</sup>:
+
+```sql
+POINT(30 10)
+LINESTRING(30 10, 10 30, 40 40)
+-- simple polygon
+POLYGON((30 10, 40 40, 20 40, 10 20, 30 10))
+-- polygon with interior hole
+-- first group of coordinates is main polygon, subsequent groups are holes
+POLYGON((35 10, 45 45, 15 40, 10 20, 35 10), (20 30, 35 35, 30 20, 20 30))
+```
+
+To insert these features into our PostGIS database, run the following SQL query:
+
+```sql
+INSERT INTO spatial_table VALUES
+  (1, 'point', 'POINT(30 10)'),
+  (2, 'line', 'LINESTRING(30 10, 10 30, 40 40)'),
+  (3, 'polygon-simple',
+      'POLYGON((30 10, 40 40, 20 40, 10 20, 30 10))'),
+  (4, 'polygon-hole', 
+      'POLYGON((35 10, 45 45, 15 40, 10 20, 35 10),(20 30, 35 35, 30 20, 20 30))');
+```
+
+To query this table and return the features in WKT format, we can use the `ST_AsText()` function as follows:
+
+```sql
+SELECT name, ST_AsText(geom) FROM spatial_table;
+```
+
+## Multipart geometries
+
+In addition to the aforementioned geometry primitives, PostGIS allows for composite geometries consisting of collections of geometry primitives. The **MultiPoint**, **MultiLinestring**, and **MultiPolygon** types are collections of multiple points, linestrings, and polygons, respectively. In addition, a **GeometryCollection** is a heterogeneous collection of any other geometry, including geometry primitives and multipart geometries. The WKT representation of these geometry types is as follows<sup id="a1">[1](#f1)</sup>:
+
+```sql
+MULTIPOINT(10 40, 40 30, 20 20, 30 10)
+MULTILINESTRING((10 10, 20 20, 10 40), (40 40, 30 30, 40 20, 30 10))
+-- mutlipolygon with the second polygon having an interior hole
+MULTIPOLYGON(((40 40, 20 45, 45 30, 40 40)),
+             ((20 35, 10 30, 10 10, 30 5, 45 20, 20 35), (30 20, 20 15, 20 25, 30 20)))
+GEOMETRYCOLLECTION(POINT(4 6), LINESTRING(4 6,7 10))
+```
+
+Note that these multipart geometries store multiple primitives in a single cell value in a table, which is distinct from a column with multiple cells each of which stores a single primitive. For example, if a researcher was studying the nesting behaviour of birds, they might have a `nest` table where each row corresponds to a single nest with the nest's location in a geometry column. Alternatively, the researcher might have a `bird` table in which each row corresponds to a single bird, which could have multiple nests all stored as a single MultiPoint geometry. PostGIS also supports other, more esoteric geometry types, including curves and 3D geometries, however, for most purposes the geometries I've defined above are more than sufficient.
+
+Let's insert examples of these geometry types into our example database:
+
+```sql
+INSERT INTO spatial_table VALUES
+  (5, 'multipoint', 'MULTIPOINT(10 40, 40 30, 20 20, 30 10)'),
+  (6, 'multilinestring', 'MULTILINESTRING((10 10, 20 20, 10 40), (40 40, 30 30, 40 20, 30 10))'),
+  (7, 'multipolygon', 
+      'MULTIPOLYGON(((40 40, 20 45, 45 30, 40 40)), ((20 35, 10 30, 10 10, 30 5, 45 20, 20 35), (30 20, 20 15, 20 25, 30 20)))'),
+  (8, 'geometrycollection', 'GEOMETRYCOLLECTION(POINT(4 6), LINESTRING(4 6,7 10))');
+```
+
+We can now query this table to return the geometry type of each row:
+
+```sql
+SELECT id, name, ST_GeometryType(geometry) FROM spatial_table;
+```
+
+| id | name               | st_geometrytype       | 
+|----|--------------------|-----------------------| 
+| 1  | point              | ST_Point              | 
+| 2  | line               | ST_LineString         | 
+| 3  | polygon-simple     | ST_Polygon            | 
+| 4  | polygon-hole       | ST_Polygon            | 
+| 5  | multipoint         | ST_MultiPoint         | 
+| 6  | multilinestring    | ST_MultiLineString    | 
+| 7  | multipolygon       | ST_MultiPolygon       | 
+| 8  | geometrycollection | ST_GeometryCollection | 
+
+# Spatial reference systems
+
+In the above examples, we've created geometries based on coordinates, however, we haven't defined what these coordinates refer to. A **spatial reference system (SRS)** is a system that maps 2-dimensional coordinates to geographical locations on the earth's surface. It defines both a geographic coordinate system (the system for representing locations on the earth as coordinates) and, often, a map projection (a transformation between geographic coordinates and locations on a plane). Without an SRS there is no way to tie a point such as `POINT(30 10)` to an actual location on the earth. Is this point located at 30°E 10°N, or 30km west and 10km north of some reference point, or something else entirely.
+
+The OGC has created a standardized way to encode all the information necessary to define an SRS and each SRS has been assigned a Spatial Reference ID (SRID), a unique number that can unambiguously identify an SRS. The website [spatialreference.org](http://spatialreference.org/) has compiled information on a wide variety projections and coordinate systems and can be useful in finding the SRID for a projection.
+
+In PostGIS, we assign an SRS to a geometry feature using the SRID. Every PostGIS-enabled database has a table named `spatial_ref_sys` that contains all the spatial reference systems recognizable by that database. To take a look at the first few records of this table run:
+
+```
+SELECT srid, srtext, proj4text FROM spatial_ref_sys LIMIT 5;
+```
+
+The `srid` column gives the SRID of the projection, `srtext` gives the full definition in the OGC's Well-known Text format, and `proj4text` gives the more compact [PROJ.4](https://en.wikipedia.org/wiki/PROJ.4) representation of the projection.
+
+## Working with coordinate systems in PostGIS
+
+I previously inserted new rows with geometry columns into our example table using the WKT representation of these geometries. A slight modification of this syntax can be used to assign an SRID to the geometry. In particular, you can use the function `ST_GeomFromText(text WKT, integer srid)` where the SRID is supplied as the second argument:
+
+```sql
+INSERT INTO spatial_table VALUES
+  (9, 'point', ST_GeomFromText('POINT(-123.12 49.28)', 4326)),
+  (10, 'point', ST_GeomFromText('POINT(491272.2 5458589.7)', 26910));
+```
+
+Here I've created two points, the first of which is in [unprojected WGS 84 coordinates](http://spatialreference.org/ref/epsg/wgs-84/) (`srid = 4326`) and gives the location of  Vancouver in terms of latitude and longitude. The second point is actually the same geographical location, but given in [UTM Zone 10 N](http://spatialreference.org/ref/epsg/nad83-utm-zone-10n/) coordinates (`srid = 26910`), where the numbers represent the number of meters from an arbitrary reference meridian and the equator, respectively.
+
+The SRID of a geometry object can be determined with the `ST_SRID()` function:
+
+```sql
+SELECT id, name, ST_GeometryType(geom), ST_SRID(geom) FROM spatial_table;
+```
+
+| id | name               | st_geometrytype       | st_srid | 
+|----|--------------------|-----------------------|---------| 
+| 1  | point              | ST_Point              | 0       | 
+| 2  | line               | ST_LineString         | 0       | 
+| 3  | polygon-simple     | ST_Polygon            | 0       | 
+| 4  | polygon-hole       | ST_Polygon            | 0       | 
+| 5  | multipoint         | ST_MultiPoint         | 0       | 
+| 6  | multilinestring    | ST_MultiLineString    | 0       | 
+| 7  | multipolygon       | ST_MultiPolygon       | 0       | 
+| 8  | geometrycollection | ST_GeometryCollection | 0       | 
+| 9  | point              | ST_Point              | 4326    | 
+| 10 | point              | ST_Point              | 26910   | 
+
+Note that the first 8 entries have `srid = 0`. Because I didn't specify their SRID when I inserted the rows into this table their SRIDs defaulted to 0 indicating that no projection has been assigned. We can update these geometry objects to assign an SRID, for example to use unprojected coordinates:
+
+```sql
+UPDATE spatial_table
+-- update the srid
+SET geom  = ST_SetSRID(geom, 4326)
+-- only alters rows that don't already have an srid assigned
+WHERE ST_SRID(geom) = 0;
+```
+
+# Geometry modifiers
+
+We now have a table storing 7 different geometry types, in a variety of projections, in a single column. While there may be some real-world cases in which you'd want such a hodge-podge of different geometries, in general it's best to have columns only contain a single geometry type in a single projection. Fortunately, geometry columns support two optional modifiers: a type modifier that constrains the type of geometry allowed in the column and an SRID modifier that constrains the SRID.
+
+The modifiers can be specified in a `CREATE TABLE` statement. For example, to create a new table named `spatial_table` with a column that stores points in unprojected WGS 84 coordinates (`srid = 4326`) run:
+
+```sql
+CREATE TABLE spatial_table (id integer, name varchar, geom geometry(POINT, 4326));
+```
+
+In this statement, `geometry(POINT, 4326)` fixes the geometry type to `POINT` and the SRID to `4326`. Now let's add a points to this table for the location of Vancouver:
+
+```sql
+INSERT INTO constrained_table VALUES
+  (1, 'vancouver', ST_GeomFromText('POINT(-123.12 49.28)', 4326));
+```
+
+However, if I try to insert the UTM coordinates for the same point, I'll get an error because this column only accepts unprojected WGS 84 coordinates:
+
+```sql
+INSERT INTO constrained_table VALUES
+  (2, 'vancouver utm', ST_GeomFromText('POINT(491272.2 5458589.7)', 26910));
+-- ERROR: Geometry SRID (26910) does not match column SRID (4326)
+```
+
+Similarly, if I try to insert a linestring into this column I'll again get an error:
+
+```sql
+INSERT INTO constrained_table VALUES
+  (2, 'line', ST_GeomFromText('LINESTRING(30 10, 10 30, 40 40)', 4326));
+-- ERROR:  Geometry type (LineString) does not match column type (Point)
+```
+
+# Importing shapefiles into PostGIS
+
+In this post we've been inserting geometries into our example table manually using WKT. While this is instructive when learning about geometry types, in practice you'll want a more efficient way to load data into a PostGIS database. Most often you'll get spatial data in shapefile format, so I'll cover two approaches for getting importing shapefiles into PostGIS. For this example, I'll use a shapefile of global country boundaries from [Natural Earth](http://www.naturalearthdata.com/downloads/), which can be downloaded [here](http://www.naturalearthdata.com/http//www.naturalearthdata.com/download/110m/cultural/ne_110m_admin_0_countries.zip). Download and unzip this file now.
+
+## Importing with `shp2sql`
+
+PostgreSQL comes with a command-line utility, `shp2sql`, specifically for converting shapefiles into SQL commands that can be loaded into a PostGIS enabled database. If you're on Windows you will also have access to a GUI interface to this tool called **pgShapeLoader**, for instructions on using this tool consult [this tutorial](http://workshops.boundlessgeo.com/postgis-intro/loading_data.html).
+
+Open up a Terminal and change to the directory with the `.shp` file you just downloaded and unzipped. Before we convert the shapefile to SQL, we'll need to know the projection (i.e. SRID) used. This information is stored in a `.prj` file, which will be in the same directory at the shapefile. Enter the following command to look at the contents of this file:
+
+```bash
+cat ne_110m_admin_0_countries.prj
+```
+
+This results in the following WKT representation of the projection:
+
+```
+GEOGCS["GCS_WGS_1984",
+      DATUM["D_WGS_1984", SPHEROID["WGS_1984",6378137.0,298.257223563]],
+      PRIMEM["Greenwich",0.0], UNIT["Degree",0.0174532925199433]]
+```
+
+We need the SRID associated with this projection. Using the [online Prj2EPSG tool](http://prj2epsg.org/search), paste in the above WKT projection string, and the tool will give you the corresponding SRID. In this case the SRID is `4326`.
+
+Now we're ready to convert the shapefile to SQL code and import it. To import this shapefile into a new table named `countries` in the `gistest` database use the following command:
+
+```
+shp2pgsql -I -s 4326 ne_110m_admin_0_countries.shp public.countries | psql -h localhost -d gistest -U postgres
+```
+
+This command has two components separated by a pipe (`|`): to the left the command converts the shapefile to SQL code and on the right the command loads that SQL into the database. On the left, the `-I` flag option creates a spatial index, `-s 4326` sets the SRID of the features, and `public.countries` specifies the schema (`public` is the default) and table name to import to. On the right, `-h` specifies the host (if it's a remote database you can put the IP address here), `-d` specifies the database name, and `-U` the username (`postgres` is the default user).
+
+Open up pgAdmin and, if everything went according to plan, you should now see a new table called `countries` with the spatial and attribute data from the shapefile. The geometry column will be called `geom`. In addition, type and SRID modifiers have been used to constrain the column to features of type polygon with an SRID of 4326. 
+
+## Importing with R
+
+For those more comfortable with R than the command line. Shapefiles, and other types of spatial formats, can easily be imported into a PostGIS database using the `rgdal` package. The following code assumes that the working directory contains the folder with all the components of the shapefile (`ne_110m_admin_0_countries/`):
+
+```r
+library(rgdal)
+# read in the shapefile
+countries <- readOGR(dsn = "ne_110m_admin_0_countries",
+                     layer = "ne_110m_admin_0_countries")
+# export to postgis
+dsn <- "PG:dbname='gistest' host='localhost' port='5432' user='postgres'"
+writeOGR(countries, dsn, layer = 'countries', driver = 'PostgreSQL')
+```
+
+In the call to `readOGR()`, `dsn` is the folder containing the shapefile and `layer` is the name of the shapefile without the .shp extension. In the call to `writeOGR()`, `layer` is the name of the table that will contain the shapefile data. In the resulting table, the geometry column will be called `wkb_geometry`. Finally, `dsn` (the  DataSource Name string) provides the information required to connect to the database. In particular, you must specify which database to load the table into (`gistest` here) as well as the host, port, and username. I've filled in the details for a standard local install, however, if you have a remote database or are using non-default settings for PostgreSQL consult the [GDAL documentation](http://www.gdal.org/drv_pg.html) for details on how to modify the DSN string.
+
+<div class="footnotes">
+  <p><strong>Footnotes</strong></p>
+  <p><strong id="f1">1</strong> 
+    WKT examples taken from Wikipedia - https://en.wikipedia.org/wiki/Well-known_text [↩](#a1)
+    </p>
+</div>

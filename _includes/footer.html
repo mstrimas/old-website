@@ -1,0 +1,29 @@
+<footer>
+  <div class="page-footer">
+    <ul class="footer-links">
+      {% if site.author.github %}
+      <li>
+        <a href="https://github.com/{{ site.author.github }}">
+          <span class="fa fa-fw fa-github" />
+        </a>
+      </li>
+      {% endif %}
+    
+      {% if site.author.twitter %}
+      <li>
+        <a href="https://twitter.com/{{ site.author.twitter }}">
+          <span class="fa fa-fw fa-twitter" />
+        </a>
+      </li>
+      {% endif %}
+      
+      {% if site.author.stackoverflow %}
+      <li>
+        <a href="https://gis.stackexchange.com/users/{{ site.author.stackoverflow }}">
+          <span class="fa fa-fw fa-stack-overflow" />
+        </a>
+      </li>
+      {% endif %}
+    </ul>
+  </div>
+</footer>

@@ -1,0 +1,26 @@
+---
+layout: default
+---
+<div class="post">
+
+  <header class="post-header">
+    <h2 class="post-title">{{ page.title }}</h2>
+    <p class="post-meta">
+      <i class="fa fa-fw fa-calendar"></i>{{ page.date | date: "%B %-d, %Y" }}
+      <a href="{{ page.path | prepend: site.github_repo | replace:'.md','.rmd' | replace:'/_posts/','/blob/master/_source/' }}">
+        <i class="fa fa-fw fa-github"></i>Post source code
+      </a>
+    </p>
+  </header>
+  {% if page.splash != null %}
+  <figure class="full-width">
+    <img src="{{ page.splash }}" height=500 style="display: block; margin: auto; /">
+  </figure>
+  {% endif %}
+  <article class="post-content">
+    {{ content }}
+  </article>
+  
+  <!-- Disqus comments -->
+  {% include disqus.html %}
+</div>

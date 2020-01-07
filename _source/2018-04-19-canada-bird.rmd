@@ -1,0 +1,38 @@
+---
+layout: post
+title: "Canada's Bird"
+published: true
+excerpt: >
+  An R package for smoothing out jagged corners and rough edges of polygons to 
+  make curves appear more natual and aesthetically pleasing.
+category: gis
+tags: r gis 
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(tidyverse)
+library(rebird)
+
+provinces <- paste0("CA-", c("YT", "NT", "NU", "BC", "AB", 
+                             "SK", "MB", "ON", "QC", "NB", 
+                             "PE", "NS", "NL"))
+freq <- map_df(provinces, ~ ebirdfreq("states", loc = .x, startyear = 2000) %>% 
+                 mutate(province = .x))
+tax <- ebirdtaxonomy(cat = "species")
+freq_sp_prov <- inner_join(freq, select(tax, comName), by = "comName") %>% 
+  group_by(comName, province) %>% 
+  summarise(mean_freq = mean(frequency),
+            pct_weeks = sum(frequency > 0) / 48) %>% 
+  ungroup() %>% 
+  complete(comName, province = provinces, 
+           fill = list(mean_freq = 0, pct_weeks = 0))
+freq_sp <- freq_sp_prov %>% 
+  group_by(comName) %>% 
+  summarise(mean_freq = mean(mean_freq),
+            mean_pct_weeks = mean(pct_weeks), 
+            n_provinces = sum(pct_weeks > 0),
+            n_provinces_fy = sum(pct_weeks == 1))
+```
+

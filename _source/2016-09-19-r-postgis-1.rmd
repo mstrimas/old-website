@@ -1,0 +1,343 @@
+---
+layout: post
+title: "PostgreSQL/PostGIS I: Getting Set Up"
+published: true
+excerpt: >
+  An introduction to the spatial database management system PostGIS, with a focus
+  on using R as an interface to PostGIS.
+category: Spatial
+tags: R Spatial GIS
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+```
+
+[PostgreSQL](https://en.wikipedia.org/wiki/PostgreSQL) is a relational database management system, similar to MySQL, and [PostGIS](https://en.wikipedia.org/wiki/PostGIS) is an extension that adds support for geographic objects. I have frequently heard about the benefits of using spatial databases rather than a collection of shapefiles and the PostgreSQL/PostGIS combo was particularly attractive since its open source. Despite this, I've avoided using these tools because I use R almost exclusively for my spatial work and it seemed like a pain to connect the two. Well, no more, I invested the time to get these tools up and running and talking to eachother on my system.
+
+This is the first in a series of posts on working with PostGIS in R. Here I'll focus on getting setup.
+
+# A note on R
+
+This is primarily a tutorial on using PostGIS through R, however, much of the information should be useful to those using PostGIS through another interface. Throughout this post I'll use the following R packages:
+
+```{r packages}
+library(dplyr)
+library(RPostgreSQL) # installation instructions below
+library(sp) # defines R's spatial classes
+library(raster) # makes for nicer printing of spatial objects
+library(rgdal) # installation instructions below
+library(rgeos) # installation instructions below
+library(viridis) # better colour palettes
+```
+
+# Installation and Setup
+
+## PostgreSQL and PostGIS
+
+KyngChaos has precompiled Mac OS X binaries for all sorts of software, including [PostgreSQL and PostGIS](http://www.kyngchaos.com/software/postgres). After installation I needed to add the PostgreSQL binary to my path, by adding the following line to `.bash_profile` in my home directory: `export PATH=/usr/local/pgsql/bin:$PATH`.  
+
+### Creating a database  
+
+Connect to PostgreSQL using the command line tool `psql` and the default user `postgres`:  
+
+```
+psql -U postgres
+```
+
+Next you can add a new database named `gistest` with:  
+
+```
+CREATE DATABASE gistest;
+```
+
+The command `\l` can be used to list existing databases to be sure you've created the new database correctly. You can connect to this new database with:  
+
+```
+\c gistest
+```
+
+### Enabling PostGIS  
+
+According to the official [PostGIS installation instructions](http://postgis.net/install/), "PostGIS is an optional extension that must be enabled in each database you want to use it in before you can use it". To enable it the following commands need to be run:  
+
+```
+-- Enable PostGIS (includes raster)
+CREATE EXTENSION postgis;
+-- Enable Topology
+CREATE EXTENSION postgis_topology;
+```
+
+Now spatial objects can be created and topological operations performed. Again referring to the official [PostGIS installation instructions](http://postgis.net/install/), you can run the following queries to check that everything is running properly:  
+
+```
+-- create table with spatial column
+CREATE TABLE mytable ( 
+  id SERIAL PRIMARY KEY,
+  geom GEOMETRY(Point, 26910),
+  name VARCHAR(128)
+); 
+ 
+-- add a spatial index
+CREATE INDEX mytable_gix
+  ON mytable 
+  USING GIST (geom); 
+ 
+-- add points
+-- the srid argument specifies the spatial reference system, i.e. projection
+INSERT INTO mytable (geom, name) VALUES
+  (ST_GeomFromText('POINT(0 0)', 26910), 'Site A'),
+  (ST_GeomFromText('POINT(1500 1500)', 26910), 'Site B'),
+  (ST_GeomFromText('POINT(1500 -1500)', 26910), 'Site C');
+ 
+-- query for nearby points
+SELECT id, name
+FROM mytable
+WHERE ST_DWithin(
+  geom, 
+  ST_GeomFromText('POINT(0 0)', 26910),
+  1000
+);
+```
+
+## RPostgreSQL  
+
+Next I installed the R package `RPostgreSQL`, which allows R to interact with PostgreSQL:  
+
+```{r install, eval=F}
+install.packages("RPostgreSQL")
+library(RPostgreSQL)
+```
+
+### Connecting to a PostgreSQL database  
+
+To work with a PostgreSQL database with `RPostgreSQL` you'll need to create a connection object, which will be passed as a parameter to functions querying the database.  
+
+```{r test-connect}
+drv <- dbDriver("PostgreSQL")
+con <- dbConnect(drv, 
+                 user = "postgres", 
+                 dbname = "gistest", 
+                 host = "localhost")
+```
+
+The majority of `RPostgreSQL` tutorials I've found online (including the official one [here](https://code.google.com/p/rpostgresql/)) show connecting with default parameters, e.g. `dbConnect(drv, dbname='spatial')`. This didn't work for me since it defaults to `host='local'` instead of `host='localhost'` and uses the username you're logged in to your system with (in my case `matt`) rather than the default PostgreSQL username `postgres`.  
+
+Now that we have a valid connection we can check that it's working by getting a list of available tables.  
+
+```{r list-tables}
+dbListTables(con)
+```
+
+The first three tables (`spatial_ref_sys`, `topology`, and `layer`) are system tables generated when installing the PostGIS spatial extensions. `mytable` is the table we created when testing PostgreSQL at the command line. Everything appears to be working! 
+
+You'll need to close the connection when you're done using it.  
+
+```{r close}
+dbDisconnect(con)
+```
+
+## GDAL  
+
+`RPostgreSQL` is a general purpose tool to connect to PostgreSQL databases, but it isn't spatially aware and doesn't have explcit methods to work with the spatial objects provided by the PostGIS extensions. The [GeoDatabase Abstraction Library](http://www.gdal.org/) is a set of open source tools for translating between vector and raster spatial formats, including PostGIS format. `rgdal` is an R interface to GDAL.  
+
+### Installation  
+
+Getting GDAL and `rgdal` up and running on Mac OS X can be a challenge. These are the steps I followed. It's likely that you also want `rgeos`, the R interface to [GEOS](https://trac.osgeo.org/geos/), which provides lots of great tools for topology operations (e.g. union, intersect, etc.). Installing GEOS and `rgeos` is an almost identical process, so it's worth doing them both at once:  
+
+1.  First you'll need to download and install the GDAL framework, and KyngChaos again comes to the rescue with [precompiled binaries](http://www.kyngchaos.com/software/frameworks).  
+2.  Once the framework is installed, you can try installing `rgdal`, being sure to use `type = 'source'`.  
+
+```{r install-rgdal, eval = F}
+install.packages("rgdal", type = "source")
+```
+
+3.  If this miraculously works, you're done. Likely it'll fail and you'll have to download the package source (something like `rgdal_1.1-10.tar.gz`) from [CRAN](https://cran.r-project.org/web/packages/rgdal/index.html).  
+4.  Open to the Terminal app and navigate to the directory where you've downloaded the source to.  
+5.  Install the package by running the following in the Terminal, making sure to replace the `tar.gz` filename with the one you downloaded:  
+
+```bash
+sudo R CMD install rgdal_1.1-10.tar.gz --configure-args='--with-gdal-config=/Library/Frameworks/GDAL.framework/unix/bin/gdal-config --with-proj-include=/Library/Frameworks/PROJ.framework/unix/include --with-proj-lib=/Library/Frameworks/PROJ.framework/unix/lib'
+```
+  
+These last few steps are courtesty of this [StackOverflow response](http://stackoverflow.com/a/7169291/3591386).  
+  
+### Checking the connection to PostGIS 
+
+Pulling vector data from the database into R with `rgdal` just requires constructing a DataSource Name (dsn) string specific to your database. Details on constructing the DSN are availble from [GDAL](http://www.gdal.org/drv_pg.html). `rgdal::readOGR()` is used to convert vector files into R's standard spatial objects as defined in the `sp` package.  
+
+```{r rgdal}
+dsn <- "PG:dbname='gistest' host='localhost' port='5432' user='postgres'"
+# list available spatial tables in database
+ogrListLayers(dsn)
+# read from PostGIS into R
+pts <- readOGR(dsn = dsn, "mytable")
+pts
+```
+
+The last example was borrowed from this useful [StackOverflow response](http://gis.stackexchange.com/a/64990/26661).  
+
+# Working with PostGIS  
+
+You should now have all the tools necessary to work with PostGIS within R. Next I'll demonstrate some of the functionality. Start by setting up a connection to the database.  
+
+```{r connect}
+drv <- dbDriver("PostgreSQL")
+con <- dbConnect(drv, 
+                 user = "postgres", 
+                 dbname = "gistest", 
+                 host = "localhost")
+```
+
+## Reading and writing data  
+
+### Non-spatial data  
+
+The `RPostgreSQL` function `dbWriteTable()` writes a data frame to a table in the PostgreSQL database. `dbListTables()` lists all tables in a given databas and `dbListFields` lists all the fields in a given table. Here I write the built in `iris` data frame to the Postgres database.
+
+```{r write-table}
+dbWriteTable(con, "iris", iris)
+dbListTables(con)
+dbListFields(con, "iris")
+```
+
+A entire table can be read from the database into a data frame with `dbReadTable()`.  
+
+```{r read-table}
+db_iris <- dbReadTable(con, "iris")
+head(db_iris) %>% 
+  kable()
+# compare the database table with the original data frame
+glimpse(db_iris)
+glimpse(iris)
+```
+
+Note that the factor variable `iris$Species` has been converted to character since the database can't store factor variables.  
+
+In addition to extracting entire tables, it's also possible to send an SQL query to the database and get the results in a data frame. `dbSendQuery()` submits an SQL query to the database and returns a result set, but it doesn't extract any records directly. `dbFetch()` returns the next chunk of records from the result set, `dbHasCompleted()` indicates whether the end of the result set has been reached, and `dbClearResult()` clears the result set when you're finished with it.  
+
+For those unfamiliar with SQL, it super easy to learn the basics and there are a variety of [tutorials online](http://www.w3schools.com/sql/sql_where.asp).  
+
+```{r send-query}
+rs <- dbSendQuery(con, "SELECT * FROM iris WHERE \"Species\" = 'setosa';")
+iris_chunk <- dbFetch(rs, n = 2)
+kable(iris_chunk)
+
+# get next 2 records
+iris_chunk <- dbFetch(rs, n = 2)
+kable(iris_chunk, row.names = F)
+
+dbGetRowCount(rs)
+dbHasCompleted(rs)
+
+# get all remaining records
+iris_chunk <- dbFetch(rs, n = -1)
+nrow(iris_chunk)
+dbHasCompleted(rs)
+dbClearResult(rs)
+```
+
+Note that `dbFetch(rs, n = -1)` returns all pending rows in the result set. 
+
+This example also brings up an oddity with PostgreSQL that may be unfamiliar to those coming from MySQL. As with SQL databases in general, PostgreSQL is case insensitive, so `select col from table` is the same as `SELECT COL FROM TABLE`. However, unlike MySQL, it seems PostreSQL goes one step further and forces all names in queries to lowercase. The catch is that `RPostgreSQL` creates tables with variable names as they appear in the data frame, including uppercase letters. For example, the variable `iris$Species` retains the uppercase `S` in the database and can't be directly referred to because `SELECT Species FROM iris` is executed as `SELECT species FROM iris`.  
+
+The way to get around this is outlined in this [blog post](http://blog.lerner.co.il/quoting-postgresql/). The trick: single and double quotes have different uses in PostgreSQL. Single quotes are used indicate to a text string, while double quotes are used to name an identifier without changing its case. This is reason behind the odd syntax `\"Species\" = 'setosa'`. Finally, don't forget to escape quotes when nested inside another set of the same type of quotes, e.g. `"he said \"hi\" to her"`.  
+
+If you want all the results of query all at once, `dbGetQuery()` submits a query, fetches the results, and clears the result set all at once.  
+
+```{r get-query}
+iris_all <- dbGetQuery(con, 'SELECT * FROM iris WHERE "Sepal.Length" > 7.6;')
+head(iris_all)
+```
+
+Finally, tables can be deleted with `dbRemoveTable()`.  
+
+```{r remove-table}
+dbRemoveTable(con, 'iris')
+```
+
+### Spatial data  
+
+I'll begin by creating some sample polygons to play with, in particular a random array of circular patches of varying sizes with randomly generated attribute data.  
+
+```{r patches}
+set.seed(1)
+e <- extent(c(0, 100, 0, 100))
+e <- as(e, 'SpatialPolygons')
+proj4string(e) <- '+proj=wag4 +lon_0=0 +units=km' # projected coordinates
+pts <- spsample(e, 100, type = 'random')
+patches <- gBuffer(pts, byid = T, width = rnorm(length(pts), mean = 1)^2)
+patches$continuous <- rnorm(length(patches))
+patches$categorical <- sample(letters[1:10], length(patches), replace = T)
+spplot(patches, 'continuous', col.regions = viridis(256))
+```
+
+Use `rgdal::writeOGR()` to load this spatial object into a PostGIS database. The `layer` parameter determines the name of the table that this object will be stored in.  
+
+```{r push-spdf}
+dsn <- "PG:dbname='gistest' host='localhost' port='5432' user='postgres'"
+writeOGR(patches, dsn, layer = 'patches', driver = 'PostgreSQL')
+as.character(ogrListLayers(dsn))
+```
+
+The spatial object is now stored as a table in the database with each feature occupying a row and each attribute a column. Two additional fields are created: `wkb_geometry` stores the geometry of the feature in [Well-known Binary (WKB) format](https://en.wikipedia.org/wiki/Well-known_text#Well-known_binary) and `ogc_fid` stores a unique feature ID. The structure of this table can be examined with `RPostgreSQL` functions.  
+
+```{r table-info, warning = TRUE}
+dbListTables(con)
+dbListFields(con, 'patches')
+rs <- dbSendQuery(con,"SELECT * FROM patches;")
+dbColumnInfo(rs)
+dbClearResult(rs)
+```
+
+A warning is raised because `RPostgreSQL` is not spatially aware, so it doesn't recognize geometry fields. If we want to get this spatial data into R we'll need to use `rgdal`, which reads the data from the PostGIS database and converts the table into an R object.
+
+```{r rgdal-extract}
+dsn <- "PG:dbname='gistest' host='localhost' port='5432' user='postgres'"
+patches_postgis <- readOGR(dsn = dsn, "patches")
+class(patches_postgis)
+```
+
+### Keys and indexes  
+
+In the context of relational databases (such as PostgreSQL and MySQL), a [primary key](https://en.wikipedia.org/wiki/Relational_database#Primary_key) is column in a table that uniquely identifies rows in that table. The primary key is used to access records in the table and to define relationships between tables.  
+
+[Indexes](https://en.wikipedia.org/wiki/Relational_database#Index) are a means of optimizing database performance. They are generally created based on columns in the table that are frequently queried and, like an index in a book, provide faster lookup within these columns.  
+
+We can look at the primary key and indexes for the `patches` table created above by logging into the database via the Terminal:  
+
+```
+psql -U postgres
+\c gistest
+```
+
+Then, executing the command `\d patches` will provide information about the table:  
+
+```
+gistest=# \d patches
+                                       Table "public.patches"
+    Column    |           Type           |                         Modifiers  
+--------------+--------------------------+------------------------------------
+ ogc_fid      | integer                  | not null default nextval('patches_ogc_fid_seq'::regclass)
+ wkb_geometry | geometry(Polygon,900914) | 
+ continuous   | double precision         | 
+ categorical  | character varying        | 
+Indexes:
+    "patches_pkey" PRIMARY KEY, btree (ogc_fid)
+    "patches_wkb_geometry_geom_idx" gist (wkb_geometry)
+```
+
+The type of `wkb_geometry` indicates that it contains polygon geometries, and the number (900914) gives the Spatial Reference ID (SRID), i.e. the projection and data of the polygons. In addition to the column names and data types, we see that the feature ID column (`ogc_fid`) has been set as primary key for this table by GDAL. Under `Modifiers`, it is also specified that `ogc_fid` is not allowed to be `NULL` and, when new rows are inserted, its value is automatically set to the next highest integer to ensure uniqueness.  
+
+In addition, GDAL has created an index based on the feature geometry (`wkb_geometry`). These spatial indexes are one of the strengths of using a spatial database. They index the spatial relationships between the bounding boxes of features, which speeds up the topological operations. Have a look at [this great discussion of spatial indexing](http://revenant.ca/www/postgis/workshop/indexing.html) for further details.  
+
+# Clean Up
+
+Finally, I delete the tables I created during this tutorial and disconnect from the database.
+
+```{r clean-up, error=FALSE}
+dbRemoveTable(con, 'iris')
+dbRemoveTable(con, 'patches')
+dbDisconnect(con)
+dbUnloadDriver(drv)
+```

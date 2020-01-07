@@ -1,0 +1,198 @@
+---
+layout: post
+title: "RStudio in the Cloud II: Syncing Code & Data with AWS"
+published: true
+excerpt: >
+  Tutorial on transferring and syncing data between an Amazon Web Services (AWS)
+  EC2 instance and your local machine, with GitHub and S3.
+category: r
+tags: r cloud
+---
+
+This is part II in a series of posts about using RStudio on Amazon Web Services (AWS). In [part I](http://strimas.com/r/rstudio-cloud-1/), I outlined how to quickly get RStudio Server running on an AWS EC2 instance. This gives you access to RStudio via a web browser with as much (or as little) computing power as you need for any given task.
+
+Once you have RStudio up and running, you'll likely want to transfer or sync some data and/or code between the remote AWS instance and your local machine. This tutorial covers this process.
+
+# Scenarios
+
+There are two broad types of scenarios in which I use RStudio on AWS. I'll address both of these scenarios in this tutorial.
+
+1. **Code development**: because my laptop is barely functional and I often work on different machines in different locations, I'll often use a free-tier EC2 instance with RStudio to develop code. These free instances aren't very powerful, but they're great if you just want to write code using RStudio in your browser. Wherever you are you can open a browser, point it to the IP of your EC2 instance, and pick up coding where you left off.
+2. **Running code**: the real power of AWS comes from the ability to handle large, computationally intensive jobs. You can spin up an EC2 instance with as much memory and as many cores as needed; you're really only limited by your budget.
+
+# Goal
+
+Typically, each project I'm working on gets its own folder, which is also an RStudio project and a git repository. Inside the project directory is an `R/` sub-directory containing R scripts, a `data/` directory that contains the data I'll be analyzing, and a `results./` directory containing results. If the data I'm working with is large, or I don't want to put it online, I'll avoid putting the data directory on GitHub.
+
+In this tutorial the goal will be as follows:
+
+1. Deploy an AWS EC2 instance with RStudio Server (see [part I](http://strimas.com/r/rstudio-cloud-1/))
+2. Get the code and data onto the instance
+4. Make changes to the code (scenario 1) or run the script to create outputs (scenario 2)
+5. Get the updated code or analysis outputs off of the instance and onto your local machine or the cloud
+6. Terminate the instance
+
+For the sake of having a concrete example to work with, I've created a [simple RStudio project](https://github.com/mstrimas/aws-example) for demonstration purposes. In this project, I look at global trends in forest loss using a data set taken from the UN [Food and Agriculture Organization's](http://www.fao.org/home/en/) [Forest Resources Assessment](http://www.fao.org/forest-resources-assessment/explore-data/en/).
+
+# Git and GitHub (Scenario 1)
+
+In general, if you're writing code on multiple machines (e.g. your local machine and an EC2 instance), you're best bet for keeping everything in sync is to use **git** and [**GitHub**](https://github.com/). These tools are specifically designed for version control, collaborative coding, and keeping code in sync between different machines. Furthermore, [RStudio](https://www.rstudio.com/) has great integration with git and GitHub. If you're new to these tools, there are many great tutorials online, however for R users by far the best is [Jenny Bryan's](https://www.stat.ubc.ca/~jenny/) [Happy Git and GitHub for the useR](http://happygitwithr.com/). I won't delve into the gory details of git here, so you're best to look at Jenny's tutorial for a proper introduction.
+
+If your needs fall under scenario 1 above, then GitHub is a good way of getting your code onto an EC2 instance, particularly if you're already using GitHub anyway. In addition, if you just want to run some code on AWS, you can use this approach provided you don't need to transfer large files. If you will be working with large files, take a look at the next section on [S3](#s3-scenario-2).
+
+## Setup
+
+Following the instructions in [part I](http://strimas.com/r/rstudio-cloud-1/), deploy a free-tier EC2 instance. Be sure to install the `tidyverse` package, either with a start-up script or by running `install.package("tidyverse")` after start up. Navigate to the URL of your EC2 instance and log on to RStudio Server.
+
+Now, under the *Tools* menu click *Shell...* to open on a command prompt. Run the following three commands to introduce yourself to git and turn on the credential helper to store your GitHub password so you don't have to type it every time. Be sure to substitute your name and **the email address associated with your GitHub account**.
+
+```bash
+git config --global user.name 'Your Name'
+git config --global user.email 'your@email.com'
+git config --global credential.helper 'cache --timeout=10000000'
+```
+
+## Getting data and code on to EC2
+
+From the RStudio *File* menu, select *New Project...*, and click *Version Control* then *Git* to create a new project based on a git repository. Finally, fill in the URL for the example repository I've created (`https://github.com/mstrimas/aws-example`), or a repo of your own. If you have a GitHub account, you may want to fork my example repository into your own account so you can push changes you've made back to GitHub. To do so, navigate to the GitHub repository for the [example RStudio project](https://github.com/mstrimas/aws-example) and click the *Fork* button in the upper-right corner of the page. Then use the URL for your own copy of the repository when creating a new RStudio project.
+
+<img src="/img/rstudio-cloud/github-repo.png" style="display: block; margin: auto;" />
+
+The RStudio project should now be copied onto your EC2 instance. Open the R script `R/forest-loss.r`, which uses FAO data to calculate the trend in forest loss by continent. Make some changes to the code, for example add `glimpse(fra)` on line 4 to get a concise summary of the data immediately after reading it in. Now run the whole script, which should create two new files in the `output/` directory: `fao-fra-region.csv` is a time series of forest change by continent and `forest-change.png` is a graphical representation of these data.
+
+## Getting data and code changes off of EC2
+
+You've now made changes to the code and created a couple output files that you'll likely want to get off of the EC2 instance. Provided none of the files are too large you can just add them to your git repository then push them to GitHub. Note that this will only work if you're using your own GitHub repository, for example if you followed the instructions above for forking the example repository I created. 
+
+RStudio has excellent git integration, so doing this is easy. In the upper-right pane click on the *Git* tab. This tab lists any files that are new/changed since your last git commit, you should see three files listed: a csv file, an image, and the R script that you modified. Click the check boxes indicating that you want to add these new/changed files to the next commit. Then click the *Commit* button, and enter a commit message, to commit these changes to your local git repository. Finally, click the *Push* button (green up arrow) to push these changes to GitHub.
+
+<img src="/img/rstudio-cloud/git-commit.png" style="display: block; margin: auto;" />
+
+Now point your browser to your GitHub repository and you should see the new files and changes there.
+
+# S3 (Scenario 2)
+
+Amazon's **Simple Storage Service (S3)** offers [extremely cheap](https://aws.amazon.com/s3/pricing/) (~$0.03 per TB per month), highly scalable cloud-based storage of objects of almost any size. In S3, data (i.e. files) are bundled together with metadata into [**objects**](https://en.wikipedia.org/wiki/Object_storage), and objects are organized into **buckets**. There are many ways to move data to and from an EC2 instance, but S3 is perhaps the simplest.
+
+## Setup
+
+To use S3, you'll need to install the AWS Command Line Interface (CLI) on both your local machine and the EC2 instance, then configure the AWS CLI with your credentials.
+
+### Local CLI install
+
+For Linux and Mac OS X users, run the following commands in the Terminal:
+
+```
+curl "https://s3.amazonaws.com/aws-cli/awscli-bundle.zip" -o "awscli-bundle.zip"
+unzip awscli-bundle.zip
+sudo ./awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws
+rm -r awscli-bundle*
+```
+
+For Windows users, use the [installer provided by AWS](http://docs.aws.amazon.com/cli/latest/userguide/installing.html#install-msi-on-windows).
+
+### EC2 CLI install
+
+Follow the instructions in part 1 to [connect to your EC2 instance via SSH](http://strimas.com/r/rstudio-cloud-1/#connecting-to-an-ec2-instance-via-ssh-optional). Then run the following command to install the CLI:
+
+```bash
+sudo apt install awscli
+```
+
+Once this finishes disconnect from the EC2 instance.
+
+### Configure the AWS CLI
+
+Now you'll need to configure the AWS CLI to interact with AWS. This will need to be done on your local machine and the EC2 instance. For this, you'll need a pair of security keys, which you can generate on the [*Security Credentials*](https://console.aws.amazon.com/iam/home?#security_credential) page of the AWS Console. Expand the *Access Keys* section, click *Create New Access Key* and a `rootkey.csv` file should be downloaded (**don't loose this file**). This file contains two keys that you'll need: an access key and a *secret* access key. Note that these are your **root account credentials**, which [AWS suggests not using](http://docs.aws.amazon.com/general/latest/gr/root-vs-iam.html) for security reasons. In a later post I'll address the correct way to do this.
+
+On your local machine, open a Terminal window, type `aws configure` to start the CLI configuration, and paste in your access keys from the `credentials.csv` file when prompted:
+
+```bash
+aws configure
+AWS Access Key ID [None]: AKIAIOSFODNN7EXAMPLE # replace with your key
+AWS Secret Access Key [None]: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY # replace with your key
+```
+
+Finally, while logged in to your RStudio Server on your EC2 instance, select *Shell...* from the *Tools* menu and run the same commands to configure the CLI. You're now ready to start using the AWS CLI to work with S3.
+
+## Create a bucket
+
+On S3, all files are stored in buckets, so let's create our first bucket. Open a Terminal window on your local machine and enter:
+
+```bash
+aws s3 mb s3://example-bucket/
+```
+This creates a bucket named `example-bucket`. **Note that bucket names must be globally unique across all of S3, so make sure you replace `example-bucket` with something more unique and use that bucket in all subsequent commands.**
+
+## Moving files to and from S3
+
+Download and unzip the [example project for this tutorial]( https://github.com/mstrimas/aws-example/archive/master.zip). This should create a directory named `aws-example-master/`. In the Terminal, navigate to the parent directory of `aws-example-master/`, and run the following command to copy the entire directory to S3:
+
+```bash
+aws s3 cp aws-example-master s3://example-bucket/aws-example-master/ --recursive
+```
+
+The `--recursive` flag copies files recursively and is useful when you want to copy entire directories. If you just wanted to copy a single file to S3 use:
+
+```bash
+aws s3 cp filename.csv s3://example-bucket/
+```
+
+Now that the project we want to work with is on S3, we'll need to bring that project onto our EC2 instance. Once again, in your RStudio Server session on EC2 open a command prompt by selecting "Shell..." from the "Tools" menu. Change to the RStudio home directory and copy the project from S3 to your EC2 instance with
+
+```bash
+cd ~
+aws s3 cp s3://example-bucket/aws-example-master/ aws-example-master/ --recursive
+```
+
+Next open the RStudio project that you just copied from S3 (`aws-example-master/aws-example.Rproj`). Open and run the script in the `R/` directory to generate the output csv and image files. Now that we're done running the script, we want to get the output off the EC2 instance so we can terminate it (remember you're paying by the hour!). Here we'll use `sync` rather than `cp`, which will only upload new or changed files to S3. At the shell prompt in your cloud-based RStudio instance run:
+
+```bash
+aws s3 sync . s3://example-bucket/aws-example-master/
+```
+
+Now that the files are on S3, you can terminate the S3 instance safely. If you want to bring these files onto your local machine, change directory to the project directory then run the following command:
+
+```bash
+aws s3 sync s3://example-bucket/aws-example-master/ .
+```
+
+# Hybrid approach
+
+I've described two approaches to transferring entire RStudio projects, including data, to an EC2 instance. However, you may also have a scenario where your code is on GitHub, but your data remains on your local machine because it's quite large. In this case, you can use a hybrid approach in which you transfer your code to the EC2 instance using GitHub and you transfer individual data files or the whole data directory using S3. Once you understand how each of these tools works it's easy to combine them in different ways.
+
+# Further S3 details
+
+To learn more about using S3 through the AWS CLI consult the [AWS CLI Command Reference](http://docs.aws.amazon.com/cli/latest/reference/s3/). Some particularly useful commands are:
+
+- List buckets
+
+```bash
+aws s3 ls
+```
+
+- List files within a bucket
+
+```bash
+aws s3 ls s3://example-bucket/
+```
+
+- Remove files from a bucket
+
+```bash
+aws s3 rm s3://example-bucket/fao-fra.csv
+```
+
+- Remove a bucket (must empty bucket first)
+
+```bash
+aws s3 rb s3://example-bucket/
+```
+
+Finally, to make files publicly available use the `--acl public-read` flag with `cp` or `sync`. For example: 
+
+```bash
+aws s3 cp fao-fra.csv s3://example-bucket/ --acl public-read
+```
+
+Files made public in this way are available through standard URLs of the form `http://bucket.s3.amazonaws.com/file`. For example, `fao-fra-csv` could be downloaded from `http://example-bucket.s3.amazonaws.com/fao-fra.csv`.

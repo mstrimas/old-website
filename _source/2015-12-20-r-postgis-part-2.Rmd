@@ -1,0 +1,60 @@
+---
+layout: post
+title: Working with PostGIS in R (Part 1)
+published: false
+excerpt: >
+  An introduction to the spatial database management system PostGIS, with a focus
+  on using R as an interface to PostGIS.  
+category: Spatial
+tags: R Spatial GIS
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(collapse=TRUE, error = TRUE, warning = FALSE)
+options(knitr.table.format = 'markdown')
+```
+
+All the packges I'll use in this post:  
+
+```{r packages}
+library(dplyr)
+library(RPostgreSQL) # installation instructions below
+library(sp)
+library(raster)
+library(rgdal) # installation instructions below
+library(rgeos) # installation instructions below
+library(viridis) # better colour palettes
+```
+
+[PostgreSQL](https://en.wikipedia.org/wiki/PostgreSQL) is a relational database management system, similar to MySQL, and [PostGIS](https://en.wikipedia.org/wiki/PostGIS) is an extension that adds support for geographic objects. I have frequently heard about the benefits of using spatial databases rather than a collection of shapefiles and the PostgreSQL/PostGIS combo was particularly attractive since its open source. Despite this, I've avoided using these tools because I use R almost exclusively for my spatial work and it seemed like a pain to connect the two. Well, no more, I invested the time to get these tools up and running and talking to eachother on my system.  
+
+This is the first in a series of posts on working with PostGIS in R. Here I'll focus on getting setup.  
+
+## Working with spatial data  
+
+### Topology operations  
+
+#### Union and dissolve  
+
+```{r}
+rs <- dbSendQuery(con, "
+  CREATE INDEX mytable_gix
+    ON mytable 
+    USING GIST (geom); 
+")
+dbClearResult(rs)
+```
+
+
+https://duncanjg.wordpress.com/2012/09/23/edge-to-edge-distance-using-postgis/
+
+
+```{r grid}
+# r <- raster(nrows=25, ncols=25, xmn=0, xmx=1, ymn=0, ymx=1, vals=NULL)
+# r <- rasterToPolygons(r)
+# r <- geometry(r)
+# r$continuous <- rnorm(length(r))
+# r$categorical <- sample(letters[1:10], length(r), replace = T)
+# spplot(r, 'continuous', col.regions = viridis(256))
+```

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+  
+  {% include head.html %}
+  
+  <body>
+    
+    {% include navbar.html %}
+    
+    <div class="container content">
+      <div class="row">
+        <div class="ten columns offset-by-one">
+        {{ content }}
+        </div>
+      </div>
+    </div>
+    
+    {% include footer.html %}
+    
+  </body>
+</html>
